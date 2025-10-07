@@ -1,0 +1,23 @@
+# Example RFID Reader Configuration
+# Copy this file to 'config.yaml' and customize for your setup
+
+# Global tag password configuration
+# IMPORTANT: Configure these passwords before production use!
+# Use pattern: <TagClassName>.<passwordType>
+# Only configure passwords for tag formats you actually use
+tagPasswords:
+  DE290Tag.access: "CHANGE-ME"
+  DE290Tag.kill: "CHANGE-ME"
+  DE386Tag.access: "CHANGE-ME"
+  DE386Tag.kill: "CHANGE-ME"
+
+# Default tag format for initialization (DE290, CD290, DE6, DE290F, or DE386)
+defaultTagFormat: DE290
+
+# Reader configurations
+readers:
+  - name: reader1
+    address: 192.168.1.100
+    port: 10001
+    mode: host
+    antennas: [4]

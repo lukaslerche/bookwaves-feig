@@ -1,0 +1,9 @@
+target/
+.git/
+.vscode/
+*.md
+.gitignore
+.gitkeep
+native/linux.x64/install.sh
+docker-compose.yml
+config.yaml

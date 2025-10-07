@@ -1,0 +1,11 @@
+services:
+  feig:
+    image: ghcr.io/lukaslerche/bookwaves-feig:latest
+    container_name: feig
+    ports:
+      - "7070:7070"
+    volumes:
+      # REQUIRED: Mount your configuration file
+      # Copy config.yaml.example to config.yaml and customize before running
+      - ./config.yaml:/app/config/config.yaml:ro
+    restart: unless-stopped

@@ -1,0 +1,30 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "type": "java",
+        "name": "Test Notification Mode",
+        "request": "launch",
+        "mainClass": "de.bookwaves.NotiTest",
+        "projectName": "feig",
+        "env": {
+          "LD_LIBRARY_PATH": "${workspaceFolder}/native/linux.x64",
+          "CONFIG_FILE_PATH": "${workspaceFolder}/config.yaml"
+        }
+      },
+      {
+        "type": "java",
+        "name": "Run Main with Native Libs",
+        "request": "launch",
+        "mainClass": "de.bookwaves.Main",
+        "projectName": "feig",
+        "env": {
+          "LD_LIBRARY_PATH": "${workspaceFolder}/native/linux.x64",
+          "CONFIG_FILE_PATH": "${workspaceFolder}/config.yaml"
+        }
+      }
+    ]
+}

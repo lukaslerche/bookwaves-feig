@@ -1,0 +1,38 @@
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+
+.vscode/
+.idea/
+*.iml
+*.log
+
+# ignore Eclipse specifics
+.classpath
+.settings
+.project
+.factorypath
+
+javalinstagram.db
+# javalin-html-forms-example
+upload/
+
+native/linux.x64/lib*
+libs/fedm*
+.DS_Store
+old
+.github
+
+# Local configuration file (must be provided by user)
+config.yaml
+
+# Keep example configuration
+!config.yaml.example
+
+NOTES.md
