@@ -68,6 +68,8 @@ public class ReaderManager {
         private NotificationListener notificationListener;
         private int listenerPort = -1;
         private final Lock lock = new ReentrantLock(true);
+        private volatile String lastConnectionStatus = "not_initialized";
+        private volatile String lastConnectionError = null;
 
         public ManagedReader(ReaderConfig config) {
             this.config = config;
@@ -77,6 +79,7 @@ public class ReaderManager {
             if (readerModule == null) {
                 readerModule = new ReaderModule(RequestMode.UniDirectional);
                 log.debug("Created ReaderModule for {} in UniDirectional mode", config.getName());
+                lastConnectionStatus = "disconnected";
             }
 
             if (!readerModule.isConnected()) {
@@ -93,13 +96,42 @@ public class ReaderManager {
                 }
 
                 if (returnCode != ErrorCode.Ok) {
+                    lastConnectionStatus = "error";
+                    lastConnectionError = readerModule.lastErrorStatusText();
                     throw new Exception("Failed to connect to reader " + config.getName() + ": " + 
                                       readerModule.lastErrorStatusText() + " (code: " + returnCode + ")");
                 }
                 log.info("Connected to reader {}", config.getName());
+                lastConnectionStatus = "connected";
+                lastConnectionError = null;
+            } else {
+                lastConnectionStatus = "connected";
             }
 
             return readerModule;
+        }
+
+        /**
+         * Fast status check for listing endpoints.
+         * Never triggers reconnect/connect attempts.
+         */
+        public synchronized boolean isConnectedFast() {
+            return readerModule != null && readerModule.isConnected();
+        }
+
+        /**
+         * Fast status text for listing endpoints.
+         * Never triggers reconnect/connect attempts.
+         */
+        public synchronized String getConnectionStatusFast() {
+            if (readerModule == null) {
+                return lastConnectionStatus;
+            }
+            return readerModule.isConnected() ? "connected" : "disconnected";
+        }
+
+        public String getLastConnectionError() {
+            return lastConnectionError;
         }
 
         /**
@@ -153,48 +185,53 @@ public class ReaderManager {
          * @return The result of the operation
          * @throws ReaderOperationException if the operation fails after all retries
          */
-        public <T> T executeWithReconnect(ReaderOperation<T> operation) throws ReaderOperationException {
-            Exception lastException = null;
-            
-            for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
-                try {
-                    ReaderModule reader = getModule();
-                    if (attempt > 1) {
-                        log.info("Recovered connection to {} on attempt {}", config.getName(), attempt);
-                    }
-                    return operation.execute(reader);
-                } catch (Exception e) {
-                    lastException = e;
-                    String errorMsg = e.getMessage();
-                    
-                    // Check if it's a connection error
-                    if (isConnectionError(errorMsg)) {
-                        log.warn("Connection error on attempt {}/{} for {}: {}", 
-                            attempt, MAX_RECONNECT_ATTEMPTS, config.getName(), errorMsg);
-                        
-                        if (attempt < MAX_RECONNECT_ATTEMPTS) {
-                            try {
-                                Thread.sleep(RECONNECT_DELAY_MS * attempt); // Exponential backoff
-                                forceReconnect();
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                throw new ReaderOperationException("Operation interrupted during reconnection");
-                            } catch (Exception reconnectError) {
-                                log.error("Reconnection failed for {}: {}", config.getName(), reconnectError.getMessage());
-                            }
+        public synchronized <T> T executeWithReconnect(ReaderOperation<T> operation) throws ReaderOperationException {
+            lock.lock();
+            try {
+                Exception lastException = null;
+
+                for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
+                    try {
+                        ReaderModule reader = getModule();
+                        if (attempt > 1) {
+                            log.info("Recovered connection to {} on attempt {}", config.getName(), attempt);
                         }
-                    } else {
-                        // Non-connection error, don't retry
-                        throw new ReaderOperationException("Operation failed: " + errorMsg);
+                        return operation.execute(reader);
+                    } catch (Exception e) {
+                        lastException = e;
+                        String errorMsg = e.getMessage();
+
+                        // Check if it's a connection error
+                        if (isConnectionError(errorMsg)) {
+                            log.warn("Connection error on attempt {}/{} for {}: {}",
+                                attempt, MAX_RECONNECT_ATTEMPTS, config.getName(), errorMsg);
+
+                            if (attempt < MAX_RECONNECT_ATTEMPTS) {
+                                try {
+                                    Thread.sleep(RECONNECT_DELAY_MS * attempt); // Exponential backoff
+                                    forceReconnect();
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                    throw new ReaderOperationException("Operation interrupted during reconnection");
+                                } catch (Exception reconnectError) {
+                                    log.error("Reconnection failed for {}: {}", config.getName(), reconnectError.getMessage());
+                                }
+                            }
+                        } else {
+                            // Non-connection error, don't retry
+                            throw new ReaderOperationException("Operation failed: " + errorMsg);
+                        }
                     }
                 }
+
+                // All attempts failed
+                throw new ReaderOperationException(
+                    "Operation failed after " + MAX_RECONNECT_ATTEMPTS + " attempts: " +
+                    (lastException != null ? lastException.getMessage() : "Unknown error")
+                );
+            } finally {
+                lock.unlock();
             }
-            
-            // All attempts failed
-            throw new ReaderOperationException(
-                "Operation failed after " + MAX_RECONNECT_ATTEMPTS + " attempts: " + 
-                (lastException != null ? lastException.getMessage() : "Unknown error")
-            );
         }
 
         /**
@@ -318,6 +355,7 @@ public class ReaderManager {
         public synchronized void disconnect() {
             if (readerModule != null && readerModule.isConnected()) {
                 readerModule.disconnect();
+                lastConnectionStatus = "disconnected";
             }
         }
 
@@ -332,6 +370,7 @@ public class ReaderManager {
                 log.info("Closing reader {}", config.getName());
                 readerModule.close();
                 readerModule = null;
+                lastConnectionStatus = "disconnected";
             }
         }
 

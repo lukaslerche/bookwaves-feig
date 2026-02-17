@@ -267,16 +267,8 @@ public class Main {
                 ReaderConfig config = managedReader.getConfig();
                 
                 // Check connection status
-                boolean isConnected = false;
-                String connectionStatus = "disconnected";
-                try {
-                    ReaderModule module = managedReader.getModule();
-                    isConnected = module.isConnected();
-                    connectionStatus = isConnected ? "connected" : "disconnected";
-                } catch (Exception e) {
-                    log.error("Failed to query connection status for {}: {}", config.getName(), e.getMessage());
-                    connectionStatus = "error: " + e.getMessage();
-                }
+                boolean isConnected = managedReader.isConnectedFast();
+                String connectionStatus = managedReader.getConnectionStatusFast();
                 
                 Map<String, Object> readerInfo = new java.util.LinkedHashMap<>();
                 readerInfo.put("name", config.getName());
@@ -287,6 +279,9 @@ public class Main {
                 readerInfo.put("antennaMask", String.format("0x%02X", config.getAntennaMask()));
                 readerInfo.put("isConnected", isConnected);
                 readerInfo.put("connectionStatus", connectionStatus);
+                if (!isConnected && managedReader.getLastConnectionError() != null) {
+                    readerInfo.put("lastConnectionError", managedReader.getLastConnectionError());
+                }
                 readerInfo.put("notificationActive", managedReader.isNotificationModeActive());
                 if (managedReader.isNotificationModeActive()) {
                     readerInfo.put("notificationPort", managedReader.getListenerPort());
