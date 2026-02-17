@@ -459,27 +459,27 @@ Before using the devcontainer, you must obtain the Feig SDK files:
 1. **Download the Feig SDK** from the official Feig Electronic website:
    - Navigate to the SDK download section for Java
    - Download the latest Java SDK package (64-bit Linux version required)
+   - Note: Current version used is: `FEIG.ID.SDK.Gen3.Java-v7.0.0`
 
 2. **Extract required files** to the project directories:
    
    **JAR files** (`libs/` directory):
    ```
    libs/fedm-funit-java-api-1.1.0.jar
-   libs/fedm-java-api-6.10.jar
-   libs/fedm-service-java-api-11.0.2.jar
+   libs/fedm-java-api-7.0.0.jar
+   libs/fedm-service-java-api-11.1.2.jar
    ```
    
    **Native libraries** (`native/linux.x64/` directory):
    ```
    native/linux.x64/install.sh
    native/linux.x64/libfecom.so.5.1.0
-   native/linux.x64/libfedm-funti.so.1.1.0
-   native/linux.x64/libfedm-funti4.so
-   native/linux.x64/libfedm-funti4j.so.1.1.0
-   native/linux.x64/libfedm-service.so.11.0.2
-   native/linux.x64/libfedm-service4j.so.11.0.2
-   native/linux.x64/libfedm.so.6.11.0
-   native/linux.x64/libfedm4j.so.6.11.0
+   native/linux.x64/libfedm-funit.so.1.1.0
+   native/linux.x64/libfedm-funit4j.so.1.1.0
+   native/linux.x64/libfedm-service.so.11.1.2
+   native/linux.x64/libfedm-service4j.so.11.1.2
+   native/linux.x64/libfedm.so.7.0.0
+   native/linux.x64/libfedm4j.so.7.0.0
    native/linux.x64/libfeisp.so.1.5.1
    native/linux.x64/libfetls.so.0.9.0
    native/linux.x64/libfeudp.so.1.0.0
@@ -500,17 +500,17 @@ Before using the devcontainer, you must obtain the Feig SDK files:
    .
    ├── libs/
    │   ├── fedm-funit-java-api-1.1.0.jar
-   │   ├── fedm-java-api-6.10.jar
-   │   └── fedm-service-java-api-11.0.2.jar
+   │   ├── fedm-java-api-7.0.0.jar
+   │   └── fedm-service-java-api-11.1.2.jar
    ├── native/
    │   └── linux.x64/
    │       ├── install.sh
    │       ├── libfecom.so -> libfecom.so.5
    │       ├── libfecom.so.5 -> libfecom.so.5.1.0
    │       ├── libfecom.so.5.1.0
-   │       ├── libfedm.so -> libfedm.so.6
-   │       ├── libfedm.so.6 -> libfedm.so.6.11.0
-   │       ├── libfedm.so.6.11.0
+   │       ├── libfedm.so -> libfedm.so.7
+   │       ├── libfedm.so.7 -> libfedm.so.7.0.0
+   │       ├── libfedm.so.7.0.0
    │       └── (etc. - all libraries with symlinks)
    └── ...
    ```
