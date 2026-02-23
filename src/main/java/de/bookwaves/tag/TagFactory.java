@@ -105,6 +105,7 @@ public class TagFactory {
         
         if (Arrays.equals(header, DE290FTag.DE290F_HEADER)) {
             log.debug("Detected DE290F tag from header");
+            // IMPORTANT: Passwords for DE290FTag are still looked up with "DE290Tag" prefix since it's a variant
             return new DE290FTag(pc, epc, 
                 getPassword("DE290Tag", "access", "CHANGE-ME-IN-YAML-ACCESS"),
                 getPassword("DE290Tag", "kill", "CHANGE-ME-IN-YAML-KILL"));
