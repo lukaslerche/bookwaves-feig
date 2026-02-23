@@ -337,52 +337,50 @@ public class Main {
 
                         });
                         
-                        ThBase tagHandler = reader.hm().createTagHandler(i);
-                        
-                        
-                        if (tagHandler == null) {
-                            log.warn("Failed to create tag handler for tag at index {}", i);
-                            continue;
-                        } else if (tagHandler.tagHandlerType() == ThBase.TypeEpcClass1Gen2 ){
-                            log.debug("Tag handler type: EPC Class 1 Gen 2");
-                            ThEpcClass1Gen2 epcTag = (ThEpcClass1Gen2) tagHandler;
-                            if(epcTag.isEpcAndTid()) {
-                                log.debug("EPC: {}", epcTag.epcToHexString());
-                                log.debug("TID: {}", epcTag.tidToHexString());
+                        try (ThBase tagHandler = reader.hm().createTagHandler(i)) {
+                            if (tagHandler == null) {
+                                log.warn("Failed to create tag handler for tag at index {}", i);
+                                continue;
+                            } else if (tagHandler instanceof ThEpcClass1Gen2 epcTag) {
+                                log.debug("Tag handler type: EPC Class 1 Gen 2");
+                                if(epcTag.isEpcAndTid()) {
+                                    log.debug("EPC: {}", epcTag.epcToHexString());
+                                    log.debug("TID: {}", epcTag.tidToHexString());
+                                } else {
+                                    log.debug("EPC: {}", epcTag.epcToHexString());
+
+                                }
+                                Thread.sleep(200); // Small delay to ensure tag is ready for next command
+                                // Read blocks
+                                int blocksToRead = 10; // Number of blocks to read
+                                int startBlock = 0; // Starting block address
+                                Bank bank = Bank.Epc; // Memory bank to read from
+                                DataBuffer data = new DataBuffer(); // Each block is 2 bytes
+                                returnCode = epcTag.readMultipleBlocks(bank, startBlock, blocksToRead, data);
+                                log.debug("Read multiple blocks return code: {}", returnCode);
+                                log.debug("Last error state: {}", reader.lastErrorStatusText());
+                                log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
+                                log.debug("Read data: {}", data.toHexString(" "));
+
+
+                                Thread.sleep(200); // Small delay to ensure tag is ready for next command
+                                // example byte array
+                                byte[] newEpc = new byte[] { (byte)0x11, (byte)0x22, (byte)0x33, (byte)0x44, (byte)0x55, (byte)0x66 };
+                                DataBuffer dataToWrite = new DataBuffer(newEpc);
+                                returnCode = epcTag.writeMultipleBlocks(bank, 2, 3, dataToWrite);
+
+                                log.debug("Write multiple blocks return code: {}", returnCode);
+                                log.debug("Last error state: {}", reader.lastErrorStatusText());
+                                log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
+                                log.debug("Write data: {}", dataToWrite.toHexString(" "));
+
+
                             } else {
-                                log.debug("EPC: {}", epcTag.epcToHexString());
-
+                                log.debug("Tag handler type: {}", tagHandler.tagHandlerType());
                             }
-                            Thread.sleep(200); // Small delay to ensure tag is ready for next command
-                            // Read blocks
-                            int blocksToRead = 10; // Number of blocks to read
-                            int startBlock = 0; // Starting block address
-                            Bank bank = Bank.Epc; // Memory bank to read from
-                            DataBuffer data = new DataBuffer(); // Each block is 2 bytes
-                            returnCode = epcTag.readMultipleBlocks(bank, startBlock, blocksToRead, data);
-                            log.debug("Read multiple blocks return code: {}", returnCode);
-                            log.debug("Last error state: {}", reader.lastErrorStatusText());
-                            log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
-                            log.debug("Read data: {}", data.toHexString(" "));
 
-
-                            Thread.sleep(200); // Small delay to ensure tag is ready for next command
-                            // example byte array
-                            byte[] newEpc = new byte[] { (byte)0x11, (byte)0x22, (byte)0x33, (byte)0x44, (byte)0x55, (byte)0x66 };
-                            DataBuffer dataToWrite = new DataBuffer(newEpc);
-                            returnCode = epcTag.writeMultipleBlocks(bank, 2, 3, dataToWrite);
-
-                            log.debug("Write multiple blocks return code: {}", returnCode);
-                            log.debug("Last error state: {}", reader.lastErrorStatusText());
-                            log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
-                            log.debug("Write data: {}", dataToWrite.toHexString(" "));
-                            
-
-                        } else {
-                            log.debug("Tag handler type: {}", tagHandler.tagHandlerType());
+                            log.debug("Transponder name: {}", tagHandler.transponderName());
                         }
-
-                        log.debug("Transponder name: {}", tagHandler.transponderName());
 
                     }
 
@@ -843,54 +841,55 @@ public class Main {
         }
 
         // Get the tag handler
-        ThBase handler = reader.hm().createTagHandler(0);
-        if (!(handler instanceof ThEpcClass1Gen2)) {
-            throw new Exception("Tag is not EPC Gen2 compatible");
-        }
+        try (ThBase handler = reader.hm().createTagHandler(0)) {
+            if (!(handler instanceof ThEpcClass1Gen2)) {
+                throw new Exception("Tag is not EPC Gen2 compatible");
+            }
 
-        ThEpcClass1Gen2 epcTag = (ThEpcClass1Gen2) handler;
+            ThEpcClass1Gen2 epcTag = (ThEpcClass1Gen2) handler;
 
-        // Step 1: Write kill + access passwords together to Reserved bank (with retry)
-        // Kill password at word 0-1 (4 bytes), access password at word 2-3 (4 bytes)
-        // Total: 8 bytes = 4 blocks, starting at word 0
-        byte[] bothPasswords = new byte[8];
-        System.arraycopy(newTag.getKillPassword(), 0, bothPasswords, 0, 4);
-        System.arraycopy(newTag.getAccessPassword(), 0, bothPasswords, 4, 4);
-        
-        DataBuffer passwordsData = new DataBuffer(bothPasswords);
-        returnCode = writeWithRetry(
-            epcTag,
-            ThEpcClass1Gen2.Bank.Reserved,
-            0, // Start at word address 0 (kill password location)
-            4, // 8 bytes = 4 words/blocks
-            passwordsData
-        );
+            // Step 1: Write kill + access passwords together to Reserved bank (with retry)
+            // Kill password at word 0-1 (4 bytes), access password at word 2-3 (4 bytes)
+            // Total: 8 bytes = 4 blocks, starting at word 0
+            byte[] bothPasswords = new byte[8];
+            System.arraycopy(newTag.getKillPassword(), 0, bothPasswords, 0, 4);
+            System.arraycopy(newTag.getAccessPassword(), 0, bothPasswords, 4, 4);
 
-        if (returnCode != ErrorCode.Ok) {
-            throw new Exception("Failed to write passwords: " + reader.lastErrorStatusText() + 
-                              " (ISO error: " + epcTag.lastIsoError() + ")");
-        }
+            DataBuffer passwordsData = new DataBuffer(bothPasswords);
+            returnCode = writeWithRetry(
+                epcTag,
+                ThEpcClass1Gen2.Bank.Reserved,
+                0, // Start at word address 0 (kill password location)
+                4, // 8 bytes = 4 words/blocks
+                passwordsData
+            );
 
-        // Step 2: Write PC + EPC together (PC is 1 word = 1 block, EPC follows immediately)
-        // Combine PC and EPC into single buffer
-        byte[] pcAndEpc = new byte[newTag.getPc().length + newTag.getEpc().length];
-        System.arraycopy(newTag.getPc(), 0, pcAndEpc, 0, newTag.getPc().length);
-        System.arraycopy(newTag.getEpc(), 0, pcAndEpc, newTag.getPc().length, newTag.getEpc().length);
-        
-        DataBuffer pcEpcData = new DataBuffer(pcAndEpc);
-        int totalBlocks = pcAndEpc.length / 2; // PC (1 block) + EPC (8 blocks for DE290) = 9 blocks
-        
-        returnCode = writeWithRetry(
-            epcTag,
-            ThEpcClass1Gen2.Bank.Epc,
-            1, // Start at word address 1 (PC is at word 1, EPC starts at word 2)
-            totalBlocks,
-            pcEpcData
-        );
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to write passwords: " + reader.lastErrorStatusText() +
+                                  " (ISO error: " + epcTag.lastIsoError() + ")");
+            }
 
-        if (returnCode != ErrorCode.Ok) {
-            throw new Exception("Failed to write PC+EPC: " + reader.lastErrorStatusText() +
-                              " (ISO error: " + epcTag.lastIsoError() + ")");
+            // Step 2: Write PC + EPC together (PC is 1 word = 1 block, EPC follows immediately)
+            // Combine PC and EPC into single buffer
+            byte[] pcAndEpc = new byte[newTag.getPc().length + newTag.getEpc().length];
+            System.arraycopy(newTag.getPc(), 0, pcAndEpc, 0, newTag.getPc().length);
+            System.arraycopy(newTag.getEpc(), 0, pcAndEpc, newTag.getPc().length, newTag.getEpc().length);
+
+            DataBuffer pcEpcData = new DataBuffer(pcAndEpc);
+            int totalBlocks = pcAndEpc.length / 2; // PC (1 block) + EPC (8 blocks for DE290) = 9 blocks
+
+            returnCode = writeWithRetry(
+                epcTag,
+                ThEpcClass1Gen2.Bank.Epc,
+                1, // Start at word address 1 (PC is at word 1, EPC starts at word 2)
+                totalBlocks,
+                pcEpcData
+            );
+
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to write PC+EPC: " + reader.lastErrorStatusText() +
+                                  " (ISO error: " + epcTag.lastIsoError() + ")");
+            }
         }
 
         // CRITICAL: After writing EPC, must re-inventory to get fresh tag handler
@@ -906,43 +905,31 @@ public class Main {
             throw new Exception("Failed to re-select tag after EPC write: " + reader.lastErrorStatusText());
         }
 
-        // Verify the tag has the correct NEW EPC
+        // Verify the tag has the correct NEW EPC and lock with a fresh handler
         String expectedEpcHex = newTag.getEpcHexString();
-        ThEpcClass1Gen2 freshEpcTag = null;
-        for (int i = 0; i < reader.hm().itemCount(); i++) {
-            TagItem tagItem = reader.hm().tagItem(i);
-            if (tagItem.iddToHexString().equalsIgnoreCase(expectedEpcHex)) {
-                ThBase freshHandler = reader.hm().createTagHandler(i);
-                if (freshHandler instanceof ThEpcClass1Gen2) {
-                    freshEpcTag = (ThEpcClass1Gen2) freshHandler;
-                    break;
-                }
+        try (ThEpcClass1Gen2 freshEpcTag = findTagByEpc(reader, expectedEpcHex)) {
+            if (freshEpcTag == null) {
+                throw new Exception("Tag EPC verification failed - expected " + expectedEpcHex + " but not found in field");
             }
-        }
 
-        if (freshEpcTag == null) {
-            throw new Exception("Tag EPC verification failed - expected " + expectedEpcHex + " but not found in field");
-        }
+            // Step 3: Lock memory banks (now using fresh tag handler)
+            // Lock kill password, access password, and EPC memory
+            // Parameters: kill, access, epc, tid, user
+            DataBuffer accessPwdData = new DataBuffer(newTag.getAccessPassword());
+            returnCode = lockWithRetry(
+                freshEpcTag,
+                LockParam.Lock,      // Lock kill password
+                LockParam.Lock,      // Lock access password
+                LockParam.Lock,      // Lock EPC memory
+                LockParam.Unchanged, // Leave TID unchanged
+                LockParam.Unchanged, // Leave User memory unchanged
+                accessPwdData        // Use access password for locking
+            );
 
-        epcTag = freshEpcTag; // Use fresh handler for locking
-
-        // Step 3: Lock memory banks (now using fresh tag handler)
-        // Lock kill password, access password, and EPC memory
-        // Parameters: kill, access, epc, tid, user
-        DataBuffer accessPwdData = new DataBuffer(newTag.getAccessPassword());
-        returnCode = lockWithRetry(
-            epcTag,
-            LockParam.Lock,      // Lock kill password
-            LockParam.Lock,      // Lock access password  
-            LockParam.Lock,      // Lock EPC memory
-            LockParam.Unchanged, // Leave TID unchanged
-            LockParam.Unchanged, // Leave User memory unchanged
-            accessPwdData        // Use access password for locking
-        );
-
-        if (returnCode != ErrorCode.Ok) {
-            throw new Exception("Failed to lock memory banks: " + reader.lastErrorStatusText() +
-                              " (ISO error: " + epcTag.lastIsoError() + ")");
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to lock memory banks: " + reader.lastErrorStatusText() +
+                                  " (ISO error: " + freshEpcTag.lastIsoError() + ")");
+            }
         }
     }
 
@@ -969,84 +956,82 @@ public class Main {
         }
 
         // Find matching tag
-        ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex);
-        if (epcTag == null) {
-            throw new Exception("Specified tag not found or not EPC Gen2");
-        }
+        try (ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex)) {
+            if (epcTag == null) {
+                throw new Exception("Specified tag not found or not EPC Gen2");
+            }
 
-        // Use old access password for unlocking
-        DataBuffer oldAccessPwd = new DataBuffer(oldTag.getAccessPassword());
-        
-        // Step 1: Unlock memory banks using old access password
-        // Parameters: kill, access, epc, tid, user
-        returnCode = lockWithRetry(
-            epcTag,
-            LockParam.Unlock,    // Unlock kill password
-            LockParam.Unlock,    // Unlock access password
-            LockParam.Unlock,    // Unlock EPC memory
-            LockParam.Unchanged, // Leave TID unchanged
-            LockParam.Unchanged, // Leave User memory unchanged
-            oldAccessPwd         // Use OLD access password
-        );
+            // Use old access password for unlocking
+            DataBuffer oldAccessPwd = new DataBuffer(oldTag.getAccessPassword());
 
-        if (returnCode != ErrorCode.Ok) {
-            log.warn("Warning: Failed to unlock memory banks: {}", reader.lastErrorStatusText());
-            // Continue anyway - tag might not be locked
-        }
+            // Step 1: Unlock memory banks using old access password
+            // Parameters: kill, access, epc, tid, user
+            returnCode = lockWithRetry(
+                epcTag,
+                LockParam.Unlock,    // Unlock kill password
+                LockParam.Unlock,    // Unlock access password
+                LockParam.Unlock,    // Unlock EPC memory
+                LockParam.Unchanged, // Leave TID unchanged
+                LockParam.Unchanged, // Leave User memory unchanged
+                oldAccessPwd         // Use OLD access password
+            );
 
-        // Step 2: Write new kill + access passwords together in one operation
-        // Kill password at word 0-1 (4 bytes), access password at word 2-3 (4 bytes)
-        byte[] bothNewPasswords = new byte[8];
-        System.arraycopy(newTag.getKillPassword(), 0, bothNewPasswords, 0, 4);
-        System.arraycopy(newTag.getAccessPassword(), 0, bothNewPasswords, 4, 4);
-        
-        DataBuffer newPasswordsData = new DataBuffer(bothNewPasswords);
-        returnCode = writeWithRetry(
-            epcTag,
-            ThEpcClass1Gen2.Bank.Reserved,
-            0, // Start at word 0 (kill password location)
-            4, // 8 bytes = 4 words
-            newPasswordsData
-        );
+            if (returnCode != ErrorCode.Ok) {
+                log.warn("Warning: Failed to unlock memory banks: {}", reader.lastErrorStatusText());
+                // Continue anyway - tag might not be locked
+            }
 
-        if (returnCode != ErrorCode.Ok) {
-            throw new Exception("Failed to write new passwords: " + reader.lastErrorStatusText() +
-                              " (ISO error: " + epcTag.lastIsoError() + ")");
-        }
+            // Step 2: Write new kill + access passwords together in one operation
+            // Kill password at word 0-1 (4 bytes), access password at word 2-3 (4 bytes)
+            byte[] bothNewPasswords = new byte[8];
+            System.arraycopy(newTag.getKillPassword(), 0, bothNewPasswords, 0, 4);
+            System.arraycopy(newTag.getAccessPassword(), 0, bothNewPasswords, 4, 4);
 
-        // Step 3: Write EPC (and PC if length changed)
-        // Use NEW access password from this point forward
-        DataBuffer newAccessPwd = new DataBuffer(newTag.getAccessPassword());
-        
-        if (oldEpcLength != newEpcLength) {
-            // Length changed - must write PC+EPC together
-            byte[] pcAndEpc = new byte[newTag.getPc().length + newTag.getEpc().length];
-            System.arraycopy(newTag.getPc(), 0, pcAndEpc, 0, newTag.getPc().length);
-            System.arraycopy(newTag.getEpc(), 0, pcAndEpc, newTag.getPc().length, newTag.getEpc().length);
-            
-            DataBuffer pcEpcData = new DataBuffer(pcAndEpc);
+            DataBuffer newPasswordsData = new DataBuffer(bothNewPasswords);
             returnCode = writeWithRetry(
                 epcTag,
-                ThEpcClass1Gen2.Bank.Epc,
-                1, // Start at word 1 (PC+EPC)
-                pcAndEpc.length / 2,
-                pcEpcData
+                ThEpcClass1Gen2.Bank.Reserved,
+                0, // Start at word 0 (kill password location)
+                4, // 8 bytes = 4 words
+                newPasswordsData
             );
-        } else {
-            // Length unchanged - write only EPC data
-            DataBuffer epcData = new DataBuffer(newTag.getEpc());
-            returnCode = writeWithRetry(
-                epcTag,
-                ThEpcClass1Gen2.Bank.Epc,
-                2, // EPC starts at word 2 (after PC at word 1)
-                newTag.getEpc().length / 2,
-                epcData
-            );
-        }
 
-        if (returnCode != ErrorCode.Ok) {
-            throw new Exception("Failed to write new EPC: " + reader.lastErrorStatusText() +
-                              " (ISO error: " + epcTag.lastIsoError() + ")");
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to write new passwords: " + reader.lastErrorStatusText() +
+                                  " (ISO error: " + epcTag.lastIsoError() + ")");
+            }
+
+            // Step 3: Write EPC (and PC if length changed)
+            if (oldEpcLength != newEpcLength) {
+                // Length changed - must write PC+EPC together
+                byte[] pcAndEpc = new byte[newTag.getPc().length + newTag.getEpc().length];
+                System.arraycopy(newTag.getPc(), 0, pcAndEpc, 0, newTag.getPc().length);
+                System.arraycopy(newTag.getEpc(), 0, pcAndEpc, newTag.getPc().length, newTag.getEpc().length);
+
+                DataBuffer pcEpcData = new DataBuffer(pcAndEpc);
+                returnCode = writeWithRetry(
+                    epcTag,
+                    ThEpcClass1Gen2.Bank.Epc,
+                    1, // Start at word 1 (PC+EPC)
+                    pcAndEpc.length / 2,
+                    pcEpcData
+                );
+            } else {
+                // Length unchanged - write only EPC data
+                DataBuffer epcData = new DataBuffer(newTag.getEpc());
+                returnCode = writeWithRetry(
+                    epcTag,
+                    ThEpcClass1Gen2.Bank.Epc,
+                    2, // EPC starts at word 2 (after PC at word 1)
+                    newTag.getEpc().length / 2,
+                    epcData
+                );
+            }
+
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to write new EPC: " + reader.lastErrorStatusText() +
+                                  " (ISO error: " + epcTag.lastIsoError() + ")");
+            }
         }
 
         // CRITICAL: After writing EPC, must re-inventory to get fresh tag handler
@@ -1063,27 +1048,27 @@ public class Main {
 
         // Find the tag with NEW EPC
         String newEpcHex = newTag.getEpcHexString();
-        ThEpcClass1Gen2 freshEpcTag = findTagByEpc(reader, newEpcHex);
-        if (freshEpcTag == null) {
-            throw new Exception("Could not re-select tag with new EPC: " + newEpcHex);
-        }
+        try (ThEpcClass1Gen2 freshEpcTag = findTagByEpc(reader, newEpcHex)) {
+            if (freshEpcTag == null) {
+                throw new Exception("Could not re-select tag with new EPC: " + newEpcHex);
+            }
 
-        epcTag = freshEpcTag; // Use fresh handler for locking
+            // Step 4: Lock memory banks again using new access password (with fresh handler)
+            DataBuffer newAccessPwd = new DataBuffer(newTag.getAccessPassword());
+            returnCode = lockWithRetry(
+                freshEpcTag,
+                LockParam.Lock,      // Lock kill password
+                LockParam.Lock,      // Lock access password
+                LockParam.Lock,      // Lock EPC memory
+                LockParam.Unchanged, // Leave TID unchanged
+                LockParam.Unchanged, // Leave User memory unchanged
+                newAccessPwd         // Use NEW access password
+            );
 
-        // Step 4: Lock memory banks again using new access password (with fresh handler)
-        returnCode = lockWithRetry(
-            epcTag,
-            LockParam.Lock,      // Lock kill password
-            LockParam.Lock,      // Lock access password
-            LockParam.Lock,      // Lock EPC memory
-            LockParam.Unchanged, // Leave TID unchanged
-            LockParam.Unchanged, // Leave User memory unchanged
-            newAccessPwd         // Use NEW access password
-        );
-
-        if (returnCode != ErrorCode.Ok) {
-            throw new Exception("Failed to lock memory banks: " + reader.lastErrorStatusText() +
-                              " (ISO error: " + epcTag.lastIsoError() + ")");
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to lock memory banks: " + reader.lastErrorStatusText() +
+                                  " (ISO error: " + freshEpcTag.lastIsoError() + ")");
+            }
         }
     }
 
@@ -1107,10 +1092,10 @@ public class Main {
         }
 
         // Find matching tag
-        ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex);
-        if (epcTag == null) {
-            throw new Exception("Specified tag not found or not EPC Gen2");
-        }
+        try (ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex)) {
+            if (epcTag == null) {
+                throw new Exception("Specified tag not found or not EPC Gen2");
+            }
 
         // Step 1: Read TID bank (96 bits = 12 bytes = 6 words)
         DataBuffer tidData = new DataBuffer();
@@ -1206,11 +1191,12 @@ public class Main {
 
         // Convert TID to hex string for response
         String tidHex = bytesToHex(tidBytes);
-        return Map.of(
-            "newEpc", tidHex,
-            "newPc", "3000",
-            "tid", tidHex
-        );
+            return Map.of(
+                "newEpc", tidHex,
+                "newPc", "3000",
+                "tid", tidHex
+            );
+        }
     }
 
     /**
@@ -1233,10 +1219,10 @@ public class Main {
         }
 
         // Find matching tag
-        ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex);
-        if (epcTag == null) {
-            throw new Exception("Specified tag not found or not EPC Gen2");
-        }
+        try (ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex)) {
+            if (epcTag == null) {
+                throw new Exception("Specified tag not found or not EPC Gen2");
+            }
 
         // Prepare response structure
         Map<String, Object> analysis = new java.util.LinkedHashMap<>();
@@ -1324,9 +1310,10 @@ public class Main {
         analysis.put("tidBank", tidBank);
         
         // Analyze Reserved bank and passwords
-        analyzeReservedBank(epcTag, theoreticalTag, analysis);
-        
-        return analysis;
+            analyzeReservedBank(epcTag, theoreticalTag, analysis);
+
+            return analysis;
+        }
     }
 
     /**
@@ -1521,42 +1508,43 @@ public class Main {
         }
 
         // Find matching tag
-        ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex);
-        if (epcTag == null) {
-            throw new Exception("Specified tag not found or not EPC Gen2");
-        }
-
-        // Write dynamic blocks with access password (if tag has password protection)
-        DataBuffer dataToWrite = new DataBuffer(dynamicBlocks);
-        
-        // Check if tag has password protection (non-zero access password)
-        byte[] accessPwd = tag.getAccessPassword();
-        boolean hasPassword = false;
-        for (byte b : accessPwd) {
-            if (b != 0) {
-                hasPassword = true;
-                break;
+        try (ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex)) {
+            if (epcTag == null) {
+                throw new Exception("Specified tag not found or not EPC Gen2");
             }
-        }
-        
-        // For BRTag, dynamic blocks are PC (word address 1)
-        // For DE290/DE6 tags, dynamic blocks are in EPC memory at calculated position
-        DataBuffer accessPwdData = hasPassword ? new DataBuffer(accessPwd) : null;
-        log.debug("Modifying security bit for {} (startBlock={} blocks={} hasPassword={})", 
-            epcHex, startBlock, dynamicBlocks.length / 2, hasPassword);
-        // Even if the tag is unlocked, sending a potential password is harmless
-        returnCode = writeWithRetry(
-            epcTag,
-            ThEpcClass1Gen2.Bank.Epc,
-            startBlock,
-            dynamicBlocks.length / 2,
-            dataToWrite,
-            accessPwdData
-        );
 
-        if (returnCode != ErrorCode.Ok) {
-            throw new Exception("Failed to write security bit: " + reader.lastErrorStatusText() +
-                              " (ISO error: " + epcTag.lastIsoError() + ")");
+            // Write dynamic blocks with access password (if tag has password protection)
+            DataBuffer dataToWrite = new DataBuffer(dynamicBlocks);
+
+            // Check if tag has password protection (non-zero access password)
+            byte[] accessPwd = tag.getAccessPassword();
+            boolean hasPassword = false;
+            for (byte b : accessPwd) {
+                if (b != 0) {
+                    hasPassword = true;
+                    break;
+                }
+            }
+
+            // For BRTag, dynamic blocks are PC (word address 1)
+            // For DE290/DE6 tags, dynamic blocks are in EPC memory at calculated position
+            DataBuffer accessPwdData = hasPassword ? new DataBuffer(accessPwd) : null;
+            log.debug("Modifying security bit for {} (startBlock={} blocks={} hasPassword={})",
+                epcHex, startBlock, dynamicBlocks.length / 2, hasPassword);
+            // Even if the tag is unlocked, sending a potential password is harmless
+            returnCode = writeWithRetry(
+                epcTag,
+                ThEpcClass1Gen2.Bank.Epc,
+                startBlock,
+                dynamicBlocks.length / 2,
+                dataToWrite,
+                accessPwdData
+            );
+
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to write security bit: " + reader.lastErrorStatusText() +
+                                  " (ISO error: " + epcTag.lastIsoError() + ")");
+            }
         }
 
         return null;
@@ -1572,6 +1560,9 @@ public class Main {
                 ThBase handler = reader.hm().createTagHandler(i);
                 if (handler instanceof ThEpcClass1Gen2) {
                     return (ThEpcClass1Gen2) handler;
+                }
+                if (handler != null) {
+                    handler.close();
                 }
             }
         }
