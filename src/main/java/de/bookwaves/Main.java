@@ -1121,6 +1121,9 @@ public class Main {
         }
 
         byte[] tidBytes = tidData.data();
+        if (tidBytes == null || tidBytes.length == 0) {
+            throw new Exception("Invalid TID read length: " + (tidBytes == null ? 0 : tidBytes.length) + " bytes");
+        }
         if (tidBytes.length != 12) {
             throw new Exception("TID read returned unexpected length: " + tidBytes.length + " bytes (expected 12)");
         }
@@ -1250,6 +1253,9 @@ public class Main {
         // Decode PC to get EPC length in words
         // PC bits 15-11 contain the length (in 16-bit words)
         byte[] pcBytes = pcData.data();
+        if (pcBytes == null || pcBytes.length < 2) {
+            throw new Exception("Invalid PC read length: " + (pcBytes == null ? 0 : pcBytes.length) + " bytes (expected at least 2)");
+        }
         int pcValue = ((pcBytes[0] & 0xFF) << 8) | (pcBytes[1] & 0xFF);
         int epcLengthInWords = (pcValue >> 11) & 0x1F; // Extract bits 15-11
         
@@ -1297,10 +1303,14 @@ public class Main {
         );
         
         Map<String, Object> tidBank = new java.util.LinkedHashMap<>();
-        tidBank.put("readSuccess", returnCode == ErrorCode.Ok);
-        if (returnCode == ErrorCode.Ok) {
-            tidBank.put("lengthBytes", tidData.data().length);
-            tidBank.put("tidHex", bytesToHex(tidData.data()));
+        byte[] analyzedTidBytes = tidData.data();
+        boolean tidReadSuccess = returnCode == ErrorCode.Ok && analyzedTidBytes != null;
+        tidBank.put("readSuccess", tidReadSuccess);
+        if (tidReadSuccess) {
+            tidBank.put("lengthBytes", analyzedTidBytes.length);
+            tidBank.put("tidHex", bytesToHex(analyzedTidBytes));
+        } else if (returnCode == ErrorCode.Ok) {
+            tidBank.put("error", "Invalid TID read: no data returned");
         } else {
             tidBank.put("error", reader.lastErrorStatusText());
             log.warn("TID read failed for {}: {}", epcHex, reader.lastErrorStatusText());
@@ -1613,10 +1623,12 @@ public class Main {
      */
     private static int writeWithRetry(ThEpcClass1Gen2 epcTag, ThEpcClass1Gen2.Bank bank, 
                                      int startBlock, int blockCount, DataBuffer data, DataBuffer password) {
+        int lastReturnCode = -1;
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             int returnCode = (password != null) 
                 ? epcTag.writeMultipleBlocks(bank, startBlock, blockCount, data, password)
                 : epcTag.writeMultipleBlocks(bank, startBlock, blockCount, data);
+            lastReturnCode = returnCode;
             
             if (returnCode == ErrorCode.Ok) {
                 if (attempt > 1) {
@@ -1635,12 +1647,12 @@ public class Main {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log.warn("Write retry interrupted");
-                    return returnCode;
+                    return lastReturnCode;
                 }
             }
         }
         
-        return -1;
+        return lastReturnCode;
     }
 
     /**
@@ -1656,8 +1668,10 @@ public class Main {
      */
     private static int lockWithRetry(ThEpcClass1Gen2 epcTag, LockParam kill, LockParam access,
                                     LockParam epc, LockParam tid, LockParam user, DataBuffer password) {
+        int lastReturnCode = -1;
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             int returnCode = epcTag.lock(kill, access, epc, tid, user, password);
+            lastReturnCode = returnCode;
             
             if (returnCode == ErrorCode.Ok) {
                 if (attempt > 1) {
@@ -1675,12 +1689,12 @@ public class Main {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log.warn("Lock retry interrupted");
-                    return returnCode;
+                    return lastReturnCode;
                 }
             }
         }
         
-        return -1;
+        return lastReturnCode;
     }
 
     /**
