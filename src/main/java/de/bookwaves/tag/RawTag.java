@@ -89,9 +89,20 @@ public class RawTag extends Tag {
 
     @Override
     public void validateMediaIdFormat(String mediaId) throws IllegalArgumentException {
-        // Raw tags don't support media ID setting at all
-        throw new IllegalArgumentException(
-            "RawTag (unknown/unformatted tag) does not support media ID operations. " +
-            "Use /initialize endpoint to format the tag first.");
+        if (mediaId == null) {
+            throw new IllegalArgumentException("Media ID cannot be null");
+        }
+
+        if (mediaId.length() % 2 != 0) {
+            throw new IllegalArgumentException(
+                "RawTag media ID must be even-length hex string");
+        }
+
+        if (!mediaId.matches("^[0-9A-Fa-f]*$")) {
+            throw new IllegalArgumentException(
+                "RawTag media ID must contain only hexadecimal characters (0-9, A-F)");
+        }
+
+        log.debug("Validated RawTag mediaId '{}'", mediaId);
     }
 }
