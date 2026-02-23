@@ -165,16 +165,40 @@ public class DE290FTag extends DE290Tag {
         if (mediaId == null || mediaId.isBlank()) {
             throw new IllegalArgumentException("Media ID cannot be empty");
         }
-        
+
+        if (mediaId.length() == URN_CODE40_LENGTH && isCode40Compatible(mediaId)) {
+            log.debug("Validated DE290F mediaId '{}' as URN Code40", mediaId);
+            return;
+        }
+
+        if (mediaId.startsWith(HBZU_PREFIX) &&
+            mediaId.length() == HBZU_PREFIX.length() + HBZU_NUMBER_LENGTH) {
+            String numericPart = mediaId.substring(HBZU_PREFIX.length());
+            validateNumericNonNegative(numericPart, mediaId);
+            log.debug("Validated DE290F mediaId '{}' as HBZU", mediaId);
+            return;
+        }
+
+        if (mediaId.startsWith("@")) {
+            String numericPart = mediaId.substring(1);
+            validateNumericNonNegative(numericPart, mediaId);
+            log.debug("Validated DE290F mediaId '{}' as @-prefixed", mediaId);
+            return;
+        }
+
+        validateNumericNonNegative(mediaId, mediaId);
+        log.debug("Validated DE290F mediaId '{}'", mediaId);
+    }
+
+    private void validateNumericNonNegative(String numericValue, String originalMediaId) {
         try {
-            long value = Long.parseLong(mediaId);
+            long value = Long.parseLong(numericValue);
             if (value < 0) {
                 throw new IllegalArgumentException("Media ID must be a non-negative number");
             }
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(
-                String.format("DE290F format requires numeric media ID (got: '%s')", mediaId));
+                String.format("Invalid DE290F media ID format: '%s'", originalMediaId), e);
         }
-        log.debug("Validated DE290F mediaId '{}'", mediaId);
     }
 }
