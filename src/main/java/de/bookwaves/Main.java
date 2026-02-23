@@ -812,6 +812,12 @@ public class Main {
                 "success", false,
                 "error", e.getMessage()
             ));
+        } catch (IllegalArgumentException e) {
+            log.warn("Invalid EPC for security change on reader {}: {}", readerName, e.getMessage());
+            ctx.status(400).json(Map.of(
+                "success", false,
+                "error", e.getMessage()
+            ));
         }
     }
 
