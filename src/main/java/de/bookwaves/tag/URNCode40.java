@@ -74,22 +74,12 @@ class URNCode40 {
             int higher = (input[i] & 0xFF);
             int lower = (input[i + 1] & 0xFF);
             int value = higher * 256 + lower;
+            int unpacked = value - 1;
 
-            int char1 = 0;
-            int char2 = 0;
-            int char3;
-
-            if (value > 1600) {
-                int rest = value % 1600;
-                char1 = (value - rest) / 1600;
-                value = rest;
-            }
-            if (value > 40) {
-                int rest = value % 40;
-                char2 = (value - rest) / 40;
-                value = rest;
-            }
-            char3 = value - 1;
+            int char1 = unpacked / 1600;
+            int remainder = unpacked % 1600;
+            int char2 = remainder / 40;
+            int char3 = remainder % 40;
 
             Character c1 = DECODE_MAP.get(char1);
             Character c2 = DECODE_MAP.get(char2);
