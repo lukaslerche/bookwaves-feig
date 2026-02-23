@@ -41,7 +41,8 @@ public class TagFactory {
      */
     private static void validatePasswordConfiguration() {
         for (Map.Entry<String, String> entry : passwordConfig.entrySet()) {
-            if (entry.getValue().contains("CHANGE-ME")) {
+            String value = entry.getValue();
+            if (value != null && value.contains("CHANGE-ME")) {
                 log.warn("SECURITY: Password '{}' is still using placeholder value! " +
                          "Configure real passwords in config.yaml", entry.getKey());
             }
@@ -66,7 +67,8 @@ public class TagFactory {
      */
     private static String getPassword(String tagClassName, String passwordType, String defaultValue) {
         String key = tagClassName + "." + passwordType;
-        return passwordConfig.getOrDefault(key, defaultValue);
+        String configuredValue = passwordConfig.get(key);
+        return configuredValue != null ? configuredValue : defaultValue;
     }
 
     /**
