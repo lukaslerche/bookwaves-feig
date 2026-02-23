@@ -120,11 +120,14 @@ public class DE290FTag extends DE290Tag {
         System.arraycopy(DE290F_HEADER, 0, newEpc, 0, 4);
         newEpc[4] = idType;
         System.arraycopy(idBytes, 0, newEpc, 5, 7);
-        // Bytes 12-15 remain 0x00 (footer)
+        if (epc != null && epc.length >= 16) {
+            System.arraycopy(epc, 12, newEpc, 12, 4);
+        }
 
         updatePCLength(newEpc.length);
         epc = newEpc;
-        log.debug("Updated DE290F mediaId '{}' with idType 0x{}", mediaIdString, String.format("%02X", idType));
+        log.debug("Updated DE290F mediaId '{}' with idType 0x{} (preserved footer bytes 12-15)",
+            mediaIdString, String.format("%02X", idType));
     }
 
     private void encodeNumericId(String numericStr, byte[] target) {
