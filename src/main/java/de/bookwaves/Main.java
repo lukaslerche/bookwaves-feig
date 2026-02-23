@@ -37,7 +37,7 @@ public class Main {
         List<ReaderConfig> readers;
 
         try {
-            readers = ConfigLoader.loadReaders("config.yaml");
+            readers = ConfigLoader.loadReaders();
         } catch (Exception e) {
             System.err.println("Failed to load reader configuration: " + e.getMessage());
             System.exit(1);

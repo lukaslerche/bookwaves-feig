@@ -68,7 +68,7 @@ public class ConfigLoader {
 
     private static Configuration globalConfig;
 
-    public static List<ReaderConfig> loadReaders(String resourcePath) throws Exception {
+    public static List<ReaderConfig> loadReaders() throws Exception {
         LoaderOptions loaderOptions = new LoaderOptions();
         Constructor constructor = new Constructor(Configuration.class, loaderOptions);
         Yaml yaml = new Yaml(constructor);
