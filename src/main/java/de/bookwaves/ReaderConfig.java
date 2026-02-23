@@ -25,7 +25,7 @@ public class ReaderConfig {
         this.address = address;
         this.port = port;
         this.mode = mode;
-        this.antennas = antennas;
+        setAntennas(antennas);
     }
 
     public String getName() {
@@ -65,7 +65,7 @@ public class ReaderConfig {
     }
 
     public void setAntennas(List<Integer> antennas) {
-        this.antennas = antennas;
+        this.antennas = antennas == null ? new ArrayList<>() : new ArrayList<>(antennas);
     }
 
     /**
@@ -77,7 +77,11 @@ public class ReaderConfig {
      */
     public byte getAntennaMask() {
         int mask = 0;
-        for (int antenna : antennas) {
+        for (Integer antenna : antennas) {
+            if (antenna == null) {
+                log.warn("Ignoring null antenna index for reader {}", name);
+                continue;
+            }
             if (antenna >= 1 && antenna <= 8) {
                 mask |= (1 << (antenna - 1));
             } else {
