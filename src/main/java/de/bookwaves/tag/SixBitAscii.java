@@ -81,6 +81,7 @@ class SixBitAscii {
         for (int i = 0; i + 5 < bitString.length(); i += 6) {
             String symbolBits = bitString.substring(i, i + 6);
             byte symbolValue = (byte) Integer.parseInt(symbolBits, 2);
+            // This might drop 0 (@) symbols, but that's consistent with the encoding (0 is used for padding)
             if (symbolValue > 0) {
                 result.append(decode(symbolValue));
             }
