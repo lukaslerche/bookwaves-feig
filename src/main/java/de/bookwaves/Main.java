@@ -2,7 +2,7 @@ package de.bookwaves;
 
 import de.bookwaves.tag.DE290FTag;
 import de.bookwaves.tag.DE290Tag;
-import de.bookwaves.tag.ASCIITag;
+import de.bookwaves.tag.BookWavesTag;
 import de.bookwaves.tag.DE6Tag;
 import de.bookwaves.tag.RawTag;
 import de.bookwaves.tag.Tag;
@@ -1861,38 +1861,38 @@ public class Main {
                 return de290fTag;
                 
             case "DE386":
-                return new ASCIITag(ASCIITag.HeaderType.DE386, mediaId, (byte) 0x00, secured,
+                return new BookWavesTag(BookWavesTag.HeaderType.DE386, mediaId, (byte) 0x00, secured,
                     TagFactory.getPasswordForType("DE386Tag", "access"),
                     TagFactory.getPasswordForType("DE386Tag", "kill"));
 
             case "DE385":
-                return new ASCIITag(ASCIITag.HeaderType.DE385, mediaId, (byte) 0x00, secured,
+                return new BookWavesTag(BookWavesTag.HeaderType.DE385, mediaId, (byte) 0x00, secured,
                     TagFactory.getPasswordForType("DE385Tag", "access"),
                     TagFactory.getPasswordForType("DE385Tag", "kill"));
 
             case "DELAN1":
-                return new ASCIITag(ASCIITag.HeaderType.DELAN1, mediaId, (byte) 0x00, secured,
+                return new BookWavesTag(BookWavesTag.HeaderType.DELAN1, mediaId, (byte) 0x00, secured,
                     TagFactory.getPasswordForType("DELAN1Tag", "access"),
                     TagFactory.getPasswordForType("DELAN1Tag", "kill"));
 
             case "DE386C40":
             case "DE386_CODE40":
-                return new ASCIITag(ASCIITag.HeaderType.DE386, mediaId, (byte) 0x00, secured,
-                    ASCIITag.MediaIdEncoding.URN_CODE40,
+                return new BookWavesTag(BookWavesTag.HeaderType.DE386, mediaId, (byte) 0x00, secured,
+                    BookWavesTag.MediaIdEncoding.URN_CODE40,
                     TagFactory.getPasswordForType("DE386Tag", "access"),
                     TagFactory.getPasswordForType("DE386Tag", "kill"));
 
             case "DE385C40":
             case "DE385_CODE40":
-                return new ASCIITag(ASCIITag.HeaderType.DE385, mediaId, (byte) 0x00, secured,
-                    ASCIITag.MediaIdEncoding.URN_CODE40,
+                return new BookWavesTag(BookWavesTag.HeaderType.DE385, mediaId, (byte) 0x00, secured,
+                    BookWavesTag.MediaIdEncoding.URN_CODE40,
                     TagFactory.getPasswordForType("DE385Tag", "access"),
                     TagFactory.getPasswordForType("DE385Tag", "kill"));
 
             case "DELAN1C40":
             case "DELAN1_CODE40":
-                return new ASCIITag(ASCIITag.HeaderType.DELAN1, mediaId, (byte) 0x00, secured,
-                    ASCIITag.MediaIdEncoding.URN_CODE40,
+                return new BookWavesTag(BookWavesTag.HeaderType.DELAN1, mediaId, (byte) 0x00, secured,
+                    BookWavesTag.MediaIdEncoding.URN_CODE40,
                     TagFactory.getPasswordForType("DELAN1Tag", "access"),
                     TagFactory.getPasswordForType("DELAN1Tag", "kill"));
                 

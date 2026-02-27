@@ -92,13 +92,13 @@ public class TagFactory {
         // Check for DE290 variants (must check DE290F before DE290 due to overlapping headers)
         byte[] header = Arrays.copyOfRange(epc, 0, 4);
         
-        if (Arrays.equals(header, ASCIITag.DE386_HEADER) ||
-            Arrays.equals(header, ASCIITag.DE385_HEADER) ||
-            Arrays.equals(header, ASCIITag.DELAN1_HEADER)) {
-            ASCIITag.HeaderType headerType = ASCIITag.HeaderType.fromHeader(header);
+        if (Arrays.equals(header, BookWavesTag.DE386_HEADER) ||
+            Arrays.equals(header, BookWavesTag.DE385_HEADER) ||
+            Arrays.equals(header, BookWavesTag.DELAN1_HEADER)) {
+            BookWavesTag.HeaderType headerType = BookWavesTag.HeaderType.fromHeader(header);
             String passwordKeyPrefix = headerType.getPasswordKeyPrefix();
             log.debug("Detected {} tag from header", headerType.getDisplayName());
-            return new ASCIITag(pc, epc,
+            return new BookWavesTag(pc, epc,
                 getPassword(passwordKeyPrefix, "access", "CHANGE-ME-IN-YAML-ACCESS"),
                 getPassword(passwordKeyPrefix, "kill", "CHANGE-ME-IN-YAML-KILL"));
         }

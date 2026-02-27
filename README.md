@@ -202,7 +202,7 @@ Initialize a blank tag with specified format and media ID. Writes EPC, passwords
 - `format` (optional) - Tag format: DE290, DE6, DE290F, DE386, DE385, DELAN1, DE386C40, DE385C40, or DELAN1C40 (defaults to configured defaultTagFormat)
 - `secured` (optional) - Security bit value: true or false (default: true)
 
-**ASCIITag media ID encodings:**
+**BookWavesTag media ID encodings:**
 - `DE386`, `DE385`, `DELAN1` use ASCII media ID encoding (max 10 ASCII chars)
 - `DE386C40`, `DE385C40`, `DELAN1C40` use left-starting URN Code40 media ID encoding (max 15 chars)
 - URN Code40 allowed characters: `A-Z`, `0-9`, space, `-`, `.`, `:`

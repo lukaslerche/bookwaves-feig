@@ -15,9 +15,9 @@ import java.util.Arrays;
  * Variable section is 2 bytes: version byte + security bit flag.
  * Padding between header and media ID is flexible to accommodate variable-length IDs.
  */
-public class ASCIITag extends Tag {
+public class BookWavesTag extends Tag {
 
-    private static final Logger log = LoggerFactory.getLogger(ASCIITag.class);
+    private static final Logger log = LoggerFactory.getLogger(BookWavesTag.class);
 
     public static final byte[] DE386_HEADER = new byte[] { (byte) 0x19, (byte) 0xEA, (byte) 0xF3, (byte) 0x21 };
     public static final byte[] DE385_HEADER = new byte[] { (byte) 0x19, (byte) 0xEA, (byte) 0xF2, (byte) 0xF9 };
@@ -77,21 +77,21 @@ public class ASCIITag extends Tag {
             if (Arrays.equals(header, DELAN1_HEADER)) {
                 return DELAN1;
             }
-            throw new IllegalArgumentException("Unsupported ASCIITag header: " + Tag.toHex(header));
+            throw new IllegalArgumentException("Unsupported BookWavesTag header: " + Tag.toHex(header));
         }
     }
 
     /**
      * Create tag from existing PC and EPC data with custom passwords
      */
-    public ASCIITag(byte[] pc, byte[] epc, String accessKey, String killKey) {
+    public BookWavesTag(byte[] pc, byte[] epc, String accessKey, String killKey) {
         this(pc, epc, MediaIdEncoding.ASCII, accessKey, killKey);
     }
 
     /**
      * Create tag from existing PC and EPC data with custom passwords and media ID encoding.
      */
-    public ASCIITag(byte[] pc, byte[] epc, MediaIdEncoding mediaIdEncoding, String accessKey, String killKey) {
+    public BookWavesTag(byte[] pc, byte[] epc, MediaIdEncoding mediaIdEncoding, String accessKey, String killKey) {
         super(pc, epc);
         byte[] header = Arrays.copyOfRange(epc, 0, HEADER_LENGTH);
         this.headerType = HeaderType.fromHeader(header);
@@ -103,7 +103,7 @@ public class ASCIITag extends Tag {
     /**
      * Create tag from media ID with specified header, version, and security bit
      */
-    public ASCIITag(HeaderType headerType, String mediaId, byte version, boolean secured,
+    public BookWavesTag(HeaderType headerType, String mediaId, byte version, boolean secured,
                     String accessKey, String killKey) {
         this(headerType, mediaId, version, secured, MediaIdEncoding.ASCII, accessKey, killKey);
     }
@@ -111,7 +111,7 @@ public class ASCIITag extends Tag {
     /**
      * Create tag from media ID with specified header, version, security bit, and encoding.
      */
-    public ASCIITag(HeaderType headerType, String mediaId, byte version, boolean secured,
+    public BookWavesTag(HeaderType headerType, String mediaId, byte version, boolean secured,
                     MediaIdEncoding mediaIdEncoding, String accessKey, String killKey) {
         super(createPC(EPC_LENGTH), createEPC(mediaId, version, secured, headerType, mediaIdEncoding));
         this.headerType = headerType;
@@ -123,14 +123,14 @@ public class ASCIITag extends Tag {
     /**
      * Create tag from media ID (defaults to version 0, secured)
      */
-    public ASCIITag(HeaderType headerType, String mediaId, String accessKey, String killKey) {
+    public BookWavesTag(HeaderType headerType, String mediaId, String accessKey, String killKey) {
         this(headerType, mediaId, (byte) 0x00, true, accessKey, killKey);
     }
 
     /**
      * Create tag from media ID (defaults to version 0, secured) with selected encoding.
      */
-    public ASCIITag(HeaderType headerType, String mediaId, MediaIdEncoding mediaIdEncoding,
+    public BookWavesTag(HeaderType headerType, String mediaId, MediaIdEncoding mediaIdEncoding,
                     String accessKey, String killKey) {
         this(headerType, mediaId, (byte) 0x00, true, mediaIdEncoding, accessKey, killKey);
     }
