@@ -9,7 +9,9 @@ import org.slf4j.LoggerFactory;
  * Configuration class representing an RFID reader.
  */
 public class ReaderConfig {
-    private static final Logger log = LoggerFactory.getLogger(ReaderConfig.class);
+    private static Logger log() {
+        return LoggerFactory.getLogger(ReaderConfig.class);
+    }
     private String name;
     private String address;
     private int port;
@@ -79,16 +81,16 @@ public class ReaderConfig {
         int mask = 0;
         for (Integer antenna : antennas) {
             if (antenna == null) {
-                log.warn("Ignoring null antenna index for reader {}", name);
+                log().warn("Ignoring null antenna index for reader {}", name);
                 continue;
             }
             if (antenna >= 1 && antenna <= 8) {
                 mask |= (1 << (antenna - 1));
             } else {
-                log.warn("Ignoring invalid antenna index {} for reader {}", antenna, name);
+                log().warn("Ignoring invalid antenna index {} for reader {}", antenna, name);
             }
         }
-        log.debug("Computed antenna mask 0x{} for reader {} from {}", String.format("%02X", mask), name, antennas);
+        log().debug("Computed antenna mask 0x{} for reader {} from {}", String.format("%02X", mask), name, antennas);
         return (byte) mask;
     }
 }

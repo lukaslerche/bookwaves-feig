@@ -21,6 +21,13 @@ defaultTagFormat: DE290
 # Application log level (trace, debug, info, warn, error)
 logLevel: INFO
 
+# Optional per-logger overrides (for org.slf4j:slf4j-simple)
+# Keys are logger names (usually package or class names)
+# To show only this app logs, set global level high (e.g., WARN) and app package lower (e.g., INFO/DEBUG)
+loggers:
+  de.bookwaves: DEBUG
+  # de.bookwaves.ReaderManager: DEBUG
+
 # Allow all origins for CORS (defaults to false)
 corsAnyHost: false
 

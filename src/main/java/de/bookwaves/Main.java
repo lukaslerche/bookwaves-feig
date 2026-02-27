@@ -29,17 +29,17 @@ public class Main {
     private static Logger log;
     private static ReaderManager readerManager;
     
-    // Retry configuration for RF operations
+    // Shared operation pacing and retry configuration for RF operations
     private static final int MAX_RETRIES = 10;
-    private static final int RETRY_DELAY_MS = 100;
+    private static final int OPERATION_SETTLE_MS = 60; // 10 might be enough analyze, but maybe writes need more?
 
     public static void main(String[] args) {
         List<ReaderConfig> readers;
 
         try {
-            readers = ConfigLoader.loadReaders();
+            ConfigLoader.loadConfiguration();
         } catch (Exception e) {
-            System.err.println("Failed to load reader configuration: " + e.getMessage());
+            System.err.println("Failed to load configuration: " + e.getMessage());
             System.exit(1);
             return;
         }
@@ -49,9 +49,35 @@ public class Main {
             System.setProperty("org.slf4j.simpleLogger.defaultLogLevel", configuredLogLevel.toLowerCase());
         }
 
+        Map<String, String> configuredLoggerLevels = ConfigLoader.getLoggerLevels();
+        for (Map.Entry<String, String> entry : configuredLoggerLevels.entrySet()) {
+            String loggerName = entry.getKey();
+            String loggerLevel = entry.getValue();
+            if (loggerName == null || loggerName.isBlank() || loggerLevel == null || loggerLevel.isBlank()) {
+                continue;
+            }
+            System.setProperty(
+                "org.slf4j.simpleLogger.log." + loggerName,
+                loggerLevel.toLowerCase()
+            );
+        }
+
         boolean corsAnyHost = ConfigLoader.isCorsAnyHost();
 
         log = LoggerFactory.getLogger(Main.class);
+        String effectiveLogLevel = System.getProperty("org.slf4j.simpleLogger.defaultLogLevel", "info");
+        log.info("Log level initialized (configured={}, effective={}, loggerOverrides={})",
+            configuredLogLevel == null || configuredLogLevel.isBlank() ? "INFO" : configuredLogLevel,
+            effectiveLogLevel.toUpperCase(),
+            configuredLoggerLevels.size());
+
+        try {
+            readers = ConfigLoader.loadReaders();
+        } catch (Exception e) {
+            log.error("Failed to load reader configuration", e);
+            System.exit(1);
+            return;
+        }
 
         log.info("Starting RFID Reader Service");
         log.info("java.library.path = {}", System.getProperty("java.library.path"));
@@ -869,6 +895,8 @@ public class Main {
                                   " (ISO error: " + epcTag.lastIsoError() + ")");
             }
 
+            pauseBetweenOperations("INIT_PASSWORDS_WRITE -> INIT_PC_EPC_WRITE", newTag.getEpcHexString());
+
             // Step 2: Write PC + EPC together (PC is 1 word = 1 block, EPC follows immediately)
             // Combine PC and EPC into single buffer
             byte[] pcAndEpc = new byte[newTag.getPc().length + newTag.getEpc().length];
@@ -981,6 +1009,8 @@ public class Main {
                 // Continue anyway - tag might not be locked
             }
 
+            pauseBetweenOperations("EDIT_UNLOCK -> EDIT_PASSWORDS_WRITE", epcHex);
+
             // Step 2: Write new kill + access passwords together in one operation
             // Kill password at word 0-1 (4 bytes), access password at word 2-3 (4 bytes)
             byte[] bothNewPasswords = new byte[8];
@@ -1000,6 +1030,8 @@ public class Main {
                 throw new Exception("Failed to write new passwords: " + reader.lastErrorStatusText() +
                                   " (ISO error: " + epcTag.lastIsoError() + ")");
             }
+
+            pauseBetweenOperations("EDIT_PASSWORDS_WRITE -> EDIT_EPC_WRITE", epcHex);
 
             // Step 3: Write EPC (and PC if length changed)
             if (oldEpcLength != newEpcLength) {
@@ -1147,6 +1179,10 @@ public class Main {
                 log.warn("Warning: Failed to unlock memory banks: {}", reader.lastErrorStatusText());
                 // Continue anyway - tag might not be locked
             }
+
+            pauseBetweenOperations("CLEAR_UNLOCK -> CLEAR_PASSWORD_CLEAR", epcHex);
+        } else {
+            pauseBetweenOperations("CLEAR_TID_READ -> CLEAR_PASSWORD_CLEAR", epcHex);
         }
 
         // Step 3: Clear both passwords (write all zeros)
@@ -1166,6 +1202,8 @@ public class Main {
             throw new Exception("Failed to clear passwords: " + reader.lastErrorStatusText() +
                               " (ISO error: " + epcTag.lastIsoError() + ")");
         }
+
+        pauseBetweenOperations("CLEAR_PASSWORD_CLEAR -> CLEAR_PC_EPC_WRITE", epcHex);
 
         // Step 4: Write PC + TID-as-EPC together
         // PC for 96-bit EPC: 0x3000 (length=6 words, no special flags)
@@ -1204,25 +1242,35 @@ public class Main {
      */
     private static Map<String, Object> analyzeTag(ReaderModule reader, ReaderConfig config, String epcHex, Tag theoreticalTag) throws Exception {
         // Parse tag to get theoretical values
+        long analyzeStartNanos = System.nanoTime();
+        log.debug("Analyze sequence started for EPC {} on reader {} (tagType={} mediaId={})",
+            epcHex, config.getName(), theoreticalTag.getTagType(), theoreticalTag.getMediaId());
         
         // Perform inventory to find the tag
         InventoryParam inventoryParam = new InventoryParam();
         inventoryParam.setAntennas(config.getAntennaMask());
+        long inventoryStartNanos = System.nanoTime();
         int returnCode = reader.hm().inventory(true, inventoryParam);
+        long inventoryDurationMs = (System.nanoTime() - inventoryStartNanos) / 1_000_000;
+        log.debug("Analyze inventory completed for {} in {} ms (rc={} lastStatus={})",
+            epcHex, inventoryDurationMs, returnCode, reader.lastErrorStatusText());
         
         if (returnCode != ErrorCode.Ok) {
             throw new Exception("Inventory failed: " + reader.lastErrorStatusText());
         }
         
+        log.debug("Analyze inventory for {} found {} tag(s)", epcHex, reader.hm().itemCount());
         if (reader.hm().itemCount() == 0) {
             throw new Exception("No tags found in field");
         }
 
         // Find matching tag
+        log.debug("Searching inventory for EPC {}", epcHex);
         try (ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex)) {
             if (epcTag == null) {
                 throw new Exception("Specified tag not found or not EPC Gen2");
             }
+            log.debug("Tag handler acquired for EPC {} (transponder={})", epcHex, epcTag.transponderName());
 
         // Prepare response structure
         Map<String, Object> analysis = new java.util.LinkedHashMap<>();
@@ -1231,12 +1279,21 @@ public class Main {
         
         // First, read just the PC to determine EPC length
         DataBuffer pcData = new DataBuffer();
+        long pcReadStartNanos = System.nanoTime();
+        log.debug("Step PC_READ: reading EPC bank word 1 (PC) for {}", epcHex);
         returnCode = epcTag.readMultipleBlocks(
             ThEpcClass1Gen2.Bank.Epc,
             1, // PC is at word 1
             1, // Read 1 word (2 bytes)
             pcData
         );
+        long pcReadDurationMs = (System.nanoTime() - pcReadStartNanos) / 1_000_000;
+        log.debug("Step PC_READ done for {} in {} ms (rc={} isoError={} bytes={})",
+            epcHex,
+            pcReadDurationMs,
+            returnCode,
+            epcTag.lastIsoError(),
+            pcData.data() == null ? 0 : pcData.data().length);
         
         if (returnCode != ErrorCode.Ok) {
             throw new Exception("Failed to read PC: " + reader.lastErrorStatusText());
@@ -1250,15 +1307,37 @@ public class Main {
         }
         int pcValue = ((pcBytes[0] & 0xFF) << 8) | (pcBytes[1] & 0xFF);
         int epcLengthInWords = (pcValue >> 11) & 0x1F; // Extract bits 15-11
+        log.debug("Decoded PC for {}: pc=0x{} epcLengthWords={} epcLengthBytes={}",
+            epcHex,
+            String.format("%04X", pcValue),
+            epcLengthInWords,
+            epcLengthInWords * 2);
+        if (epcLengthInWords <= 0) {
+            log.warn("PC decode for {} produced non-positive EPC length (pc=0x{})",
+                epcHex, String.format("%04X", pcValue));
+        }
         
         // Now read PC + EPC together based on actual length
+        pauseBetweenOperations("ANALYZE_PC_READ -> ANALYZE_EPC_READ", epcHex);
         DataBuffer epcBankData = new DataBuffer();
+        long epcReadStartNanos = System.nanoTime();
+        log.debug("Step EPC_READ: reading EPC bank words {}..{} for {}",
+            1,
+            1 + epcLengthInWords,
+            epcHex);
         returnCode = epcTag.readMultipleBlocks(
             ThEpcClass1Gen2.Bank.Epc,
             1, // Start at word 1 (PC)
             1 + epcLengthInWords, // PC (1 word) + EPC (variable words)
             epcBankData
         );
+        long epcReadDurationMs = (System.nanoTime() - epcReadStartNanos) / 1_000_000;
+        log.debug("Step EPC_READ done for {} in {} ms (rc={} isoError={} bytes={})",
+            epcHex,
+            epcReadDurationMs,
+            returnCode,
+            epcTag.lastIsoError(),
+            epcBankData.data() == null ? 0 : epcBankData.data().length);
         
         byte[] actualPcEpc = (returnCode == ErrorCode.Ok) ? epcBankData.data() : new byte[0];
         String actualPcEpcHex = bytesToHex(actualPcEpc);
@@ -1286,13 +1365,23 @@ public class Main {
         analysis.put("epcBank", epcBank);
         
         // Read TID bank (96 bits = 6 words)
+        pauseBetweenOperations("ANALYZE_EPC_READ -> ANALYZE_TID_READ", epcHex);
         DataBuffer tidData = new DataBuffer();
+        long tidReadStartNanos = System.nanoTime();
+        log.debug("Step TID_READ: reading TID bank words 0..5 for {}", epcHex);
         returnCode = epcTag.readMultipleBlocks(
             ThEpcClass1Gen2.Bank.Tid,
             0,
             6,
             tidData
         );
+        long tidReadDurationMs = (System.nanoTime() - tidReadStartNanos) / 1_000_000;
+        log.debug("Step TID_READ done for {} in {} ms (rc={} isoError={} bytes={})",
+            epcHex,
+            tidReadDurationMs,
+            returnCode,
+            epcTag.lastIsoError(),
+            tidData.data() == null ? 0 : tidData.data().length);
         
         Map<String, Object> tidBank = new java.util.LinkedHashMap<>();
         byte[] analyzedTidBytes = tidData.data();
@@ -1310,7 +1399,13 @@ public class Main {
         analysis.put("tidBank", tidBank);
         
         // Analyze Reserved bank and passwords
+            pauseBetweenOperations("ANALYZE_TID_READ -> ANALYZE_RESERVED_ANALYZE", epcHex);
+            log.debug("Step RESERVED_ANALYZE: starting reserved bank analysis for {}", epcHex);
             analyzeReservedBank(epcTag, theoreticalTag, analysis);
+            log.debug("Step RESERVED_ANALYZE: completed reserved bank analysis for {}", epcHex);
+
+            long totalDurationMs = (System.nanoTime() - analyzeStartNanos) / 1_000_000;
+            log.debug("Analyze sequence finished for {} in {} ms", epcHex, totalDurationMs);
 
             return analysis;
         }
@@ -1322,12 +1417,19 @@ public class Main {
     private static void analyzeReservedBank(ThEpcClass1Gen2 epcTag, Tag theoreticalTag, Map<String, Object> analysis) throws Exception {
         // Attempt to read Reserved bank WITHOUT password (to check lock status)
         DataBuffer reservedDataNoAuth = new DataBuffer();
+        long readNoAuthStartNanos = System.nanoTime();
         int returnCode = epcTag.readMultipleBlocks(
             ThEpcClass1Gen2.Bank.Reserved,
             0, // Kill password at word 0
             4, // Read all 4 words (kill + access passwords)
             reservedDataNoAuth
         );
+        long readNoAuthDurationMs = (System.nanoTime() - readNoAuthStartNanos) / 1_000_000;
+        log.debug("Reserved read without auth done in {} ms (rc={} isoError={} bytes={})",
+            readNoAuthDurationMs,
+            returnCode,
+            epcTag.lastIsoError(),
+            reservedDataNoAuth.data() == null ? 0 : reservedDataNoAuth.data().length);
         
         boolean reservedReadableWithoutAuth = (returnCode == ErrorCode.Ok);
         
@@ -1335,6 +1437,8 @@ public class Main {
         byte[] accessPwd = theoreticalTag.getAccessPassword();
         DataBuffer accessPwdBuf = new DataBuffer(accessPwd);
         DataBuffer reservedDataWithAuth = new DataBuffer();
+        pauseBetweenOperations("ANALYZE_RESERVED_NOAUTH_READ -> ANALYZE_RESERVED_AUTH_READ", theoreticalTag.getEpcHexString());
+        long readWithAuthStartNanos = System.nanoTime();
         returnCode = epcTag.readMultipleBlocks(
             ThEpcClass1Gen2.Bank.Reserved,
             0,
@@ -1342,6 +1446,12 @@ public class Main {
             reservedDataWithAuth,
             accessPwdBuf
         );
+        long readWithAuthDurationMs = (System.nanoTime() - readWithAuthStartNanos) / 1_000_000;
+        log.debug("Reserved read with auth done in {} ms (rc={} isoError={} bytes={})",
+            readWithAuthDurationMs,
+            returnCode,
+            epcTag.lastIsoError(),
+            reservedDataWithAuth.data() == null ? 0 : reservedDataWithAuth.data().length);
         
         boolean reservedReadableWithAuth = (returnCode == ErrorCode.Ok);
         
@@ -1483,6 +1593,27 @@ public class Main {
         securityAssessment.put("passwordProtectionConfigured", !passwordsAreZero);
         securityAssessment.put("passwordProtectionRequired", shouldHavePasswords);
         analysis.put("securityAssessment", securityAssessment);
+
+        log.debug("Reserved analysis summary for theoretical EPC {}: noAuthReadable={} withAuthReadable={} passwordsMatch={} passwordsAreZero={} secured={}",
+            theoreticalTag.getEpcHexString(),
+            reservedReadableWithoutAuth,
+            reservedReadableWithAuth,
+            passwordsMatch,
+            passwordsAreZero,
+            properlySecured);
+    }
+
+    private static void pauseBetweenOperations(String stepTransition, String epcHex) {
+        try {
+            log.debug("Operation pacing: sleeping {} ms between {} for EPC {}",
+                OPERATION_SETTLE_MS,
+                stepTransition,
+                epcHex);
+            Thread.sleep(OPERATION_SETTLE_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Operation pacing sleep interrupted during {} for EPC {}", stepTransition, epcHex);
+        }
     }
 
     /**
@@ -1640,7 +1771,7 @@ public class Main {
             
             if (attempt < MAX_RETRIES) {
                 try {
-                    Thread.sleep(RETRY_DELAY_MS);
+                    Thread.sleep(OPERATION_SETTLE_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log.warn("Write retry interrupted");
@@ -1682,7 +1813,7 @@ public class Main {
             
             if (attempt < MAX_RETRIES) {
                 try {
-                    Thread.sleep(RETRY_DELAY_MS + (attempt - 1) * 50);
+                    Thread.sleep(OPERATION_SETTLE_MS + (attempt - 1) * 50);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     log.warn("Lock retry interrupted");

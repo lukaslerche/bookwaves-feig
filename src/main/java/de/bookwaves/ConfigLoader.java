@@ -16,13 +16,16 @@ import java.util.Map;
  * Utility class to load reader configurations from a YAML file.
  */
 public class ConfigLoader {
-    private static final Logger log = LoggerFactory.getLogger(ConfigLoader.class);
+    private static Logger log() {
+        return LoggerFactory.getLogger(ConfigLoader.class);
+    }
     
     public static class Configuration {
         private List<ReaderConfig> readers;
         private Map<String, String> tagPasswords;
         private String defaultTagFormat;
         private String logLevel;
+        private Map<String, String> loggers;
         private Boolean corsAnyHost;
 
         public List<ReaderConfig> getReaders() {
@@ -57,6 +60,14 @@ public class ConfigLoader {
             this.logLevel = logLevel;
         }
 
+        public Map<String, String> getLoggers() {
+            return loggers != null ? loggers : new HashMap<>();
+        }
+
+        public void setLoggers(Map<String, String> loggers) {
+            this.loggers = loggers;
+        }
+
         public boolean isCorsAnyHost() {
             return corsAnyHost != null ? corsAnyHost : false;
         }
@@ -68,7 +79,11 @@ public class ConfigLoader {
 
     private static Configuration globalConfig;
 
-    public static List<ReaderConfig> loadReaders() throws Exception {
+    public static Configuration loadConfiguration() throws Exception {
+        if (globalConfig != null) {
+            return globalConfig;
+        }
+
         LoaderOptions loaderOptions = new LoaderOptions();
         Constructor constructor = new Constructor(Configuration.class, loaderOptions);
         Yaml yaml = new Yaml(constructor);
@@ -76,7 +91,6 @@ public class ConfigLoader {
         // Require external file path from environment variable
         String externalConfigPath = System.getenv("CONFIG_FILE_PATH");
         if (externalConfigPath == null || externalConfigPath.isEmpty()) {
-            log.error("CONFIG_FILE_PATH environment variable is not set");
             throw new Exception("CONFIG_FILE_PATH environment variable is not set. " +
                 "Please provide configuration file path via -e CONFIG_FILE_PATH=<path> or volume mount.");
         }
@@ -84,24 +98,32 @@ public class ConfigLoader {
         InputStream inputStream = null;
         try {
             inputStream = new FileInputStream(externalConfigPath);
-            log.info("Loading configuration from {}", externalConfigPath);
         } catch (Exception e) {
-            log.error("Failed to open configuration file {}: {}", externalConfigPath, e.getMessage());
             throw new Exception("Failed to load configuration file from " + externalConfigPath + ": " + e.getMessage());
         }
         
         try (InputStream stream = inputStream) {
             globalConfig = yaml.load(stream);
-            
-            if (globalConfig == null || globalConfig.getReaders() == null || globalConfig.getReaders().isEmpty()) {
-                log.error("No readers defined in configuration file {}", externalConfigPath);
-                throw new Exception("No readers found in configuration file");
+
+            if (globalConfig == null) {
+                throw new Exception("Configuration file is empty or invalid YAML");
             }
-            
-            log.info("Loaded configuration with {} readers and {} tag password entries", 
-                globalConfig.getReaders().size(), globalConfig.getTagPasswords().size());
-            return globalConfig.getReaders();
+
+            return globalConfig;
         }
+    }
+
+    public static List<ReaderConfig> loadReaders() throws Exception {
+        Configuration configuration = loadConfiguration();
+
+        if (configuration.getReaders() == null || configuration.getReaders().isEmpty()) {
+            log().error("No readers defined in configuration");
+            throw new Exception("No readers found in configuration file");
+        }
+
+        log().info("Loaded configuration with {} readers and {} tag password entries",
+            configuration.getReaders().size(), configuration.getTagPasswords().size());
+        return configuration.getReaders();
     }
 
     /**
@@ -136,6 +158,17 @@ public class ConfigLoader {
             return "INFO";
         }
         return globalConfig.getLogLevel();
+    }
+
+    /**
+     * Get per-logger level overrides (logger name -> level).
+     * Example key: "de.bookwaves" or "de.bookwaves.ReaderManager".
+     */
+    public static Map<String, String> getLoggerLevels() {
+        if (globalConfig == null) {
+            return new HashMap<>();
+        }
+        return globalConfig.getLoggers();
     }
 
     /**
