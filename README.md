@@ -581,7 +581,7 @@ docker buildx build --platform linux/amd64 --tag ghcr.io/lukaslerche/bookwaves-f
    ```bash
    docker buildx build --platform linux/amd64 \
      --tag ghcr.io/lukaslerche/bookwaves-feig:latest \
-     --tag ghcr.io/lukaslerche/bookwaves-feig:1.2.0 \
+     --tag ghcr.io/lukaslerche/bookwaves-feig:1.3.0 \
      --push .
    ```
 
