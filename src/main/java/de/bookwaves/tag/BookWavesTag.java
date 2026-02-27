@@ -67,6 +67,13 @@ public class BookWavesTag extends Tag {
             return header;
         }
 
+        public MediaIdEncoding getRequiredMediaIdEncoding() {
+            return switch (this) {
+                case DE385 -> MediaIdEncoding.URN_CODE40;
+                case DE386, DELAN1 -> MediaIdEncoding.ASCII;
+            };
+        }
+
         public static HeaderType fromHeader(byte[] header) {
             if (Arrays.equals(header, DE386_HEADER)) {
                 return DE386;
@@ -85,7 +92,12 @@ public class BookWavesTag extends Tag {
      * Create tag from existing PC and EPC data with custom passwords
      */
     public BookWavesTag(byte[] pc, byte[] epc, String accessKey, String killKey) {
-        this(pc, epc, MediaIdEncoding.ASCII, accessKey, killKey);
+        super(pc, epc);
+        byte[] header = Arrays.copyOfRange(epc, 0, HEADER_LENGTH);
+        this.headerType = HeaderType.fromHeader(header);
+        this.mediaIdEncoding = this.headerType.getRequiredMediaIdEncoding();
+        this.secretKeyAccess = accessKey;
+        this.secretKeyKill = killKey;
     }
 
     /**
@@ -95,7 +107,13 @@ public class BookWavesTag extends Tag {
         super(pc, epc);
         byte[] header = Arrays.copyOfRange(epc, 0, HEADER_LENGTH);
         this.headerType = HeaderType.fromHeader(header);
-        this.mediaIdEncoding = mediaIdEncoding;
+        MediaIdEncoding requiredEncoding = this.headerType.getRequiredMediaIdEncoding();
+        if (mediaIdEncoding != requiredEncoding) {
+            throw new IllegalArgumentException(String.format(
+                "%s requires %s media ID encoding (got %s)",
+                this.headerType.getDisplayName(), requiredEncoding, mediaIdEncoding));
+        }
+        this.mediaIdEncoding = requiredEncoding;
         this.secretKeyAccess = accessKey;
         this.secretKeyKill = killKey;
     }
@@ -105,7 +123,7 @@ public class BookWavesTag extends Tag {
      */
     public BookWavesTag(HeaderType headerType, String mediaId, byte version, boolean secured,
                     String accessKey, String killKey) {
-        this(headerType, mediaId, version, secured, MediaIdEncoding.ASCII, accessKey, killKey);
+        this(headerType, mediaId, version, secured, headerType.getRequiredMediaIdEncoding(), accessKey, killKey);
     }
 
     /**
@@ -114,8 +132,14 @@ public class BookWavesTag extends Tag {
     public BookWavesTag(HeaderType headerType, String mediaId, byte version, boolean secured,
                     MediaIdEncoding mediaIdEncoding, String accessKey, String killKey) {
         super(createPC(EPC_LENGTH), createEPC(mediaId, version, secured, headerType, mediaIdEncoding));
+        MediaIdEncoding requiredEncoding = headerType.getRequiredMediaIdEncoding();
+        if (mediaIdEncoding != requiredEncoding) {
+            throw new IllegalArgumentException(String.format(
+                "%s requires %s media ID encoding (got %s)",
+                headerType.getDisplayName(), requiredEncoding, mediaIdEncoding));
+        }
         this.headerType = headerType;
-        this.mediaIdEncoding = mediaIdEncoding;
+        this.mediaIdEncoding = requiredEncoding;
         this.secretKeyAccess = accessKey;
         this.secretKeyKill = killKey;
     }

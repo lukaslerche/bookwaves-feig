@@ -61,7 +61,7 @@ See `config.example.yaml` for the complete configuration template.
 - `DELAN1Tag.access` / `DELAN1Tag.kill` - For DELAN1 tags
 - `BRTag.secret` - For BR (Smartfreq) tags
 
-**Default tag format** - Used for tag initialization (DE290, DE6, DE290F, DE386, DE385, DELAN1, DE386C40, DE385C40, or DELAN1C40)
+**Default tag format** - Used for tag initialization (DE290, DE6, DE290F, DE386, DE385, or DELAN1)
 
 **Reader configurations:**
 - Name, IP address, port
@@ -199,12 +199,12 @@ Initialize a blank tag with specified format and media ID. Writes EPC, passwords
 
 **Query Parameters:**
 - `mediaId` (required) - Media identifier (format depends on tag type)
-- `format` (optional) - Tag format: DE290, DE6, DE290F, DE386, DE385, DELAN1, DE386C40, DE385C40, or DELAN1C40 (defaults to configured defaultTagFormat)
+- `format` (optional) - Tag format: DE290, DE6, DE290F, DE386, DE385, or DELAN1 (defaults to configured defaultTagFormat)
 - `secured` (optional) - Security bit value: true or false (default: true)
 
 **BookWavesTag media ID encodings:**
-- `DE386`, `DE385`, `DELAN1` use ASCII media ID encoding (max 10 ASCII chars)
-- `DE386C40`, `DE385C40`, `DELAN1C40` use left-starting URN Code40 media ID encoding (max 15 chars)
+- `DE386` and `DELAN1` use ASCII media ID encoding (max 10 ASCII chars)
+- `DE385` uses left-starting URN Code40 media ID encoding (max 15 chars)
 - URN Code40 allowed characters: `A-Z`, `0-9`, space, `-`, `.`, `:`
 
 **Response:**
@@ -385,7 +385,7 @@ Perform deep analysis of a tag's memory banks, passwords, and security configura
 - **DE290Tag** - TU Dortmund university library standard (uses numerical barcodes)
 - **DE290FTag** - TU Dortmund university library Fernleihe variant
 - **BRTag** - TU Dortmund university library legacy tags by Smartfreq
-- **DE385Tag** - Trier university library (uses ASCII barcodes)
+- **DE385Tag** - Trier university library (uses URN Code40 barcodes)
 - **DE386Tag** - RPTU Kaiserslautern university library (uses ASCII barcodes)
 - **DELAN1Tag** - RPTU Landau university library (uses ASCII barcodes)
 - **DE6Tag** - ULB Münster library standard (uses numerical barcodes)

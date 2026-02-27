@@ -1827,8 +1827,7 @@ public class Main {
 
     /**
      * Create a new tag instance for initialization based on format string.
-    * Supports: DE290, CD290, DE6, DE290F, DE386, DE385, DELAN1,
-    *           DE386C40, DE385C40, DELAN1C40
+    * Supports: DE290, CD290, DE6, DE290F, DE386, DE385, DELAN1
      */
     private static Tag createTagForInitialization(String format, String mediaId, boolean secured) {
         String formatUpper = format.toUpperCase();
@@ -1874,32 +1873,10 @@ public class Main {
                 return new BookWavesTag(BookWavesTag.HeaderType.DELAN1, mediaId, (byte) 0x00, secured,
                     TagFactory.getPasswordForType("DELAN1Tag", "access"),
                     TagFactory.getPasswordForType("DELAN1Tag", "kill"));
-
-            case "DE386C40":
-            case "DE386_CODE40":
-                return new BookWavesTag(BookWavesTag.HeaderType.DE386, mediaId, (byte) 0x00, secured,
-                    BookWavesTag.MediaIdEncoding.URN_CODE40,
-                    TagFactory.getPasswordForType("DE386Tag", "access"),
-                    TagFactory.getPasswordForType("DE386Tag", "kill"));
-
-            case "DE385C40":
-            case "DE385_CODE40":
-                return new BookWavesTag(BookWavesTag.HeaderType.DE385, mediaId, (byte) 0x00, secured,
-                    BookWavesTag.MediaIdEncoding.URN_CODE40,
-                    TagFactory.getPasswordForType("DE385Tag", "access"),
-                    TagFactory.getPasswordForType("DE385Tag", "kill"));
-
-            case "DELAN1C40":
-            case "DELAN1_CODE40":
-                return new BookWavesTag(BookWavesTag.HeaderType.DELAN1, mediaId, (byte) 0x00, secured,
-                    BookWavesTag.MediaIdEncoding.URN_CODE40,
-                    TagFactory.getPasswordForType("DELAN1Tag", "access"),
-                    TagFactory.getPasswordForType("DELAN1Tag", "kill"));
                 
             default:
                 throw new IllegalArgumentException("Unsupported tag format: " + format + 
-                    ". Supported formats: DE290, CD290, DE6, DE290F, DE386, DE385, DELAN1, "
-                    + "DE386C40, DE385C40, DELAN1C40");
+                    ". Supported formats: DE290, CD290, DE6, DE290F, DE386, DE385, DELAN1");
         }
     }
 }
