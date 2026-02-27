@@ -61,7 +61,7 @@ See `config.example.yaml` for the complete configuration template.
 - `DELAN1Tag.access` / `DELAN1Tag.kill` - For DELAN1 tags
 - `BRTag.secret` - For BR (Smartfreq) tags
 
-**Default tag format** - Used for tag initialization (DE290, DE6, DE290F, DE386, DE385, or DELAN1)
+**Default tag format** - Used for tag initialization (DE290, DE6, DE290F, DE386, DE385, DELAN1, DE386C40, DE385C40, or DELAN1C40)
 
 **Reader configurations:**
 - Name, IP address, port
@@ -199,8 +199,13 @@ Initialize a blank tag with specified format and media ID. Writes EPC, passwords
 
 **Query Parameters:**
 - `mediaId` (required) - Media identifier (format depends on tag type)
-- `format` (optional) - Tag format: DE290, DE6, DE290F, DE386, DE385, or DELAN1 (defaults to configured defaultTagFormat)
+- `format` (optional) - Tag format: DE290, DE6, DE290F, DE386, DE385, DELAN1, DE386C40, DE385C40, or DELAN1C40 (defaults to configured defaultTagFormat)
 - `secured` (optional) - Security bit value: true or false (default: true)
+
+**ASCIITag media ID encodings:**
+- `DE386`, `DE385`, `DELAN1` use ASCII media ID encoding (max 10 ASCII chars)
+- `DE386C40`, `DE385C40`, `DELAN1C40` use left-starting URN Code40 media ID encoding (max 15 chars)
+- URN Code40 allowed characters: `A-Z`, `0-9`, space, `-`, `.`, `:`
 
 **Response:**
 ```json

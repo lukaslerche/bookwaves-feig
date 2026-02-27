@@ -11,7 +11,7 @@ import java.util.Arrays;
 
 /**
  * Generalized tag for DE386/DE385/DELAN1 formats.
- * Uses URN Code40-encoded ISIL headers with ASCII-encoded media ID.
+ * Uses URN Code40-encoded ISIL headers with configurable media ID encoding.
  * Variable section is 2 bytes: version byte + security bit flag.
  * Padding between header and media ID is flexible to accommodate variable-length IDs.
  */
@@ -26,11 +26,19 @@ public class ASCIITag extends Tag {
     public static final int EPC_LENGTH = 16; // 128 bits
     public static final int HEADER_LENGTH = 4;
     public static final int VARIABLE_LENGTH = 2; // version + security flag
-    public static final int MAX_MEDIA_ID_LENGTH = 10; // Maximum: 16 - 4 (header) - 2 (variable) = 10 bytes
+    public static final int MEDIA_ID_BYTES_CAPACITY = EPC_LENGTH - HEADER_LENGTH - VARIABLE_LENGTH;
+    public static final int MAX_MEDIA_ID_LENGTH = MEDIA_ID_BYTES_CAPACITY; // ASCII bytes
+    public static final int MAX_MEDIA_ID_LENGTH_URN_CODE40 = (MEDIA_ID_BYTES_CAPACITY / 2) * 3; // 15 chars
 
     private final HeaderType headerType;
+    private final MediaIdEncoding mediaIdEncoding;
     private final String secretKeyAccess;
     private final String secretKeyKill;
+
+    public enum MediaIdEncoding {
+        ASCII,
+        URN_CODE40
+    }
 
     public enum HeaderType {
         DE386("DE386", "DE386Tag", DE386_HEADER),
@@ -77,9 +85,17 @@ public class ASCIITag extends Tag {
      * Create tag from existing PC and EPC data with custom passwords
      */
     public ASCIITag(byte[] pc, byte[] epc, String accessKey, String killKey) {
+        this(pc, epc, MediaIdEncoding.ASCII, accessKey, killKey);
+    }
+
+    /**
+     * Create tag from existing PC and EPC data with custom passwords and media ID encoding.
+     */
+    public ASCIITag(byte[] pc, byte[] epc, MediaIdEncoding mediaIdEncoding, String accessKey, String killKey) {
         super(pc, epc);
         byte[] header = Arrays.copyOfRange(epc, 0, HEADER_LENGTH);
         this.headerType = HeaderType.fromHeader(header);
+        this.mediaIdEncoding = mediaIdEncoding;
         this.secretKeyAccess = accessKey;
         this.secretKeyKill = killKey;
     }
@@ -89,8 +105,17 @@ public class ASCIITag extends Tag {
      */
     public ASCIITag(HeaderType headerType, String mediaId, byte version, boolean secured,
                     String accessKey, String killKey) {
-        super(createPC(EPC_LENGTH), createEPC(mediaId, version, secured, headerType));
+        this(headerType, mediaId, version, secured, MediaIdEncoding.ASCII, accessKey, killKey);
+    }
+
+    /**
+     * Create tag from media ID with specified header, version, security bit, and encoding.
+     */
+    public ASCIITag(HeaderType headerType, String mediaId, byte version, boolean secured,
+                    MediaIdEncoding mediaIdEncoding, String accessKey, String killKey) {
+        super(createPC(EPC_LENGTH), createEPC(mediaId, version, secured, headerType, mediaIdEncoding));
         this.headerType = headerType;
+        this.mediaIdEncoding = mediaIdEncoding;
         this.secretKeyAccess = accessKey;
         this.secretKeyKill = killKey;
     }
@@ -102,26 +127,54 @@ public class ASCIITag extends Tag {
         this(headerType, mediaId, (byte) 0x00, true, accessKey, killKey);
     }
 
+    /**
+     * Create tag from media ID (defaults to version 0, secured) with selected encoding.
+     */
+    public ASCIITag(HeaderType headerType, String mediaId, MediaIdEncoding mediaIdEncoding,
+                    String accessKey, String killKey) {
+        this(headerType, mediaId, (byte) 0x00, true, mediaIdEncoding, accessKey, killKey);
+    }
+
     @JsonIgnore
     public HeaderType getHeaderType() {
         return headerType;
     }
 
+    @JsonIgnore
+    public MediaIdEncoding getMediaIdEncoding() {
+        return mediaIdEncoding;
+    }
+
     @Override
     public String getMediaId() {
-        // Media ID is left-aligned: starts immediately after header, ends before variable section at 14-15
         int mediaIdStart = HEADER_LENGTH;
-        int mediaIdEnd = EPC_LENGTH - VARIABLE_LENGTH; // byte 14
+        int mediaIdLimit = EPC_LENGTH - VARIABLE_LENGTH;
 
-        // Find the end of media ID by trimming trailing null bytes and spaces before variable section
+        if (mediaIdEncoding == MediaIdEncoding.URN_CODE40) {
+            int encodedLength = 0;
+            for (int i = mediaIdStart; i + 1 < mediaIdLimit; i += 2) {
+                int pairValue = ((epc[i] & 0xFF) << 8) | (epc[i + 1] & 0xFF);
+                if (pairValue == 0) {
+                    break;
+                }
+                encodedLength += 2;
+            }
+
+            if (encodedLength == 0) {
+                return "";
+            }
+
+            byte[] encodedMediaId = Arrays.copyOfRange(epc, mediaIdStart, mediaIdStart + encodedLength);
+            return URNCode40.decode(encodedMediaId).replaceFirst("\\s+$", "");
+        }
+
+        int mediaIdEnd = mediaIdLimit;
         while (mediaIdEnd > mediaIdStart
             && (epc[mediaIdEnd - 1] == 0x00 || epc[mediaIdEnd - 1] == 0x20)) {
             mediaIdEnd--;
         }
 
-        // Extract media ID bytes
         byte[] mediaIdBytes = Arrays.copyOfRange(epc, mediaIdStart, mediaIdEnd);
-
         return new String(mediaIdBytes, StandardCharsets.US_ASCII);
     }
 
@@ -134,20 +187,14 @@ public class ASCIITag extends Tag {
         // Validate format first
         validateMediaIdFormat(mediaIdString);
 
-        if (mediaIdString.length() > MAX_MEDIA_ID_LENGTH) {
-            throw new IllegalArgumentException(String.format(
-                "Media ID too long: maximum %d characters, got %d",
-                MAX_MEDIA_ID_LENGTH, mediaIdString.length()
-            ));
-        }
-
         byte version = getVersion();
         boolean secured = isSecured();
-        byte[] newEpc = createEPC(mediaIdString, version, secured, headerType);
+        byte[] newEpc = createEPC(mediaIdString, version, secured, headerType, mediaIdEncoding);
 
         updatePCLength(newEpc.length);
         epc = newEpc;
-        log.debug("Updated {} mediaId to '{}' (secured={})", headerType.getDisplayName(), mediaIdString, secured);
+        log.debug("Updated {} mediaId to '{}' (encoding={}, secured={})",
+            headerType.getDisplayName(), mediaIdString, mediaIdEncoding, secured);
     }
 
     @Override
@@ -226,15 +273,31 @@ public class ASCIITag extends Tag {
     /**
      * Create EPC from media ID, version, security bit, and header type
      */
-    private static byte[] createEPC(String mediaId, byte version, boolean secured, HeaderType headerType) {
+    private static byte[] createEPC(String mediaId, byte version, boolean secured, HeaderType headerType,
+                                    MediaIdEncoding mediaIdEncoding) {
         byte[] epc = new byte[EPC_LENGTH];
 
         // Copy header (4 bytes)
         System.arraycopy(headerType.getHeader(), 0, epc, 0, HEADER_LENGTH);
 
-        // Left-align media ID: place it immediately after the header
-        // Media ID ends at byte 13 (variable section starts at byte 14)
-        byte[] mediaIdBytes = mediaId.getBytes(StandardCharsets.US_ASCII);
+        byte[] mediaIdBytes;
+        if (mediaIdEncoding == MediaIdEncoding.URN_CODE40) {
+            mediaIdBytes = URNCode40.encode(mediaId);
+            if (mediaIdBytes.length > MEDIA_ID_BYTES_CAPACITY) {
+                throw new IllegalArgumentException(String.format(
+                    "URN Code40 media ID too long: maximum %d characters, got %d",
+                    MAX_MEDIA_ID_LENGTH_URN_CODE40, mediaId.length()));
+            }
+        } else {
+            mediaIdBytes = mediaId.getBytes(StandardCharsets.US_ASCII);
+            if (mediaIdBytes.length > MAX_MEDIA_ID_LENGTH) {
+                throw new IllegalArgumentException(String.format(
+                    "ASCII media ID too long: maximum %d characters, got %d",
+                    MAX_MEDIA_ID_LENGTH, mediaId.length()));
+            }
+        }
+
+        // Left-align media ID bytes: start immediately after header
         int mediaIdStart = HEADER_LENGTH;
         System.arraycopy(mediaIdBytes, 0, epc, mediaIdStart, mediaIdBytes.length);
 
@@ -266,7 +329,8 @@ public class ASCIITag extends Tag {
 
     @Override
     public String toString() {
-        return String.format("%s<v%d|%s|%s>", headerType.getDisplayName(), getVersion(), getMediaId(), isSecured());
+        return String.format("%s<%s|v%d|%s|%s>",
+            headerType.getDisplayName(), mediaIdEncoding, getVersion(), getMediaId(), isSecured());
     }
 
     @Override
@@ -275,17 +339,30 @@ public class ASCIITag extends Tag {
             throw new IllegalArgumentException("Media ID cannot be empty");
         }
 
-        // Validate ASCII compatibility
-        if (!mediaId.matches("^[\\x00-\\x7F]+$")) {
-            throw new IllegalArgumentException(
-                headerType.getDisplayName() + " format requires ASCII-only media ID (got non-ASCII characters)");
+        if (mediaIdEncoding == MediaIdEncoding.URN_CODE40) {
+            if (!mediaId.matches("^[A-Z0-9 \\-.:]+$")) {
+                throw new IllegalArgumentException(
+                    headerType.getDisplayName()
+                        + " URN Code40 media ID supports only A-Z, 0-9, space, '-', '.', ':'");
+            }
+            if (mediaId.length() > MAX_MEDIA_ID_LENGTH_URN_CODE40) {
+                throw new IllegalArgumentException(String.format(
+                    "%s URN Code40 media ID too long: maximum %d characters, got %d",
+                    headerType.getDisplayName(), MAX_MEDIA_ID_LENGTH_URN_CODE40, mediaId.length()));
+            }
+        } else {
+            if (!mediaId.matches("^[\\x00-\\x7F]+$")) {
+                throw new IllegalArgumentException(
+                    headerType.getDisplayName()
+                        + " format requires ASCII-only media ID (got non-ASCII characters)");
+            }
+            if (mediaId.length() > MAX_MEDIA_ID_LENGTH) {
+                throw new IllegalArgumentException(String.format(
+                    "%s format media ID too long: maximum %d characters, got %d",
+                    headerType.getDisplayName(), MAX_MEDIA_ID_LENGTH, mediaId.length()));
+            }
         }
-
-        if (mediaId.length() > MAX_MEDIA_ID_LENGTH) {
-            throw new IllegalArgumentException(String.format(
-                "%s format media ID too long: maximum %d characters, got %d",
-                headerType.getDisplayName(), MAX_MEDIA_ID_LENGTH, mediaId.length()));
-        }
-        log.debug("Validated {} mediaId '{}'", headerType.getDisplayName(), mediaId);
+        log.debug("Validated {} mediaId '{}' with {} encoding",
+            headerType.getDisplayName(), mediaId, mediaIdEncoding);
     }
 }

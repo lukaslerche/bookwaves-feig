@@ -15,7 +15,9 @@ tagPasswords:
   DELAN1Tag.access: "CHANGE-ME"
   DELAN1Tag.kill: "CHANGE-ME"
 
-# Default tag format for initialization (DE290, CD290, DE6, DE290F, DE386, DE385, or DELAN1)
+# Default tag format for initialization
+# Supported: DE290, CD290, DE6, DE290F, DE386, DE385, DELAN1, DE386C40, DE385C40, DELAN1C40
+# Note: C40 variants use the same password keys as their base format (e.g., DE386Tag.access / DE386Tag.kill)
 defaultTagFormat: DE290
 
 # Application log level (trace, debug, info, warn, error)
