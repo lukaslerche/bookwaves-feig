@@ -111,14 +111,661 @@ public class Main {
                     config.bundledPlugins.enableCors(cors -> {
                         cors.addRule(rule -> rule.anyHost());
                     });
-                }
+                };
+
+                
+                config.events.serverStopping(() -> {
+                    log.info("Shutting down - closing all readers...");
+                    readerManager.closeAll();
+                    log.info("All readers closed");
+                });
+
+
+                // TEST ENDPOINTS - can be removed later
+                config.routes.get("/", ctx -> ctx.result("Hello Feig!"));
+
+                config.routes.get("/test", ctx -> {
+                    ctx.result("Test successful");
+                });
+
+
+                // NOTIFICATION ENDPOINTS
+                config.routes.post("/notification/start/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    log.info("Notification start requested for {}", readerName);
+                    
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    if (managedReader.isNotificationModeActive()) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Notification mode already running for this reader"
+                        ));
+                        return;
+                    }
+
+                    try {
+                        int port = readerManager.allocateListenerPort();
+                        boolean started = managedReader.startNotificationMode(port);
+                        
+                        if (!started) {
+                            log.warn("Failed to start notification mode for {} on port {}", readerName, port);
+                            ctx.status(500).json(Map.of(
+                                "success", false,
+                                "error", "Failed to start notification mode"
+                            ));
+                            return;
+                        }
+
+                        ctx.json(Map.of(
+                            "success", true,
+                            "message", "Notification mode started",
+                            "port", port,
+                            "readerName", readerName
+                        ));
+                    } catch (Exception e) {
+                        log.error("Failed to start notification mode for {}", readerName, e);
+                        ctx.status(500).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                    }
+                });
+
+                config.routes.post("/notification/stop/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    log.info("Notification stop requested for {}", readerName);
+                    
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    if (!managedReader.isNotificationModeActive()) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "No active notification session for reader: " + readerName
+                        ));
+                        return;
+                    }
+
+                    try {
+                        boolean stopped = managedReader.stopNotificationMode();
+                        
+                        if (!stopped) {
+                            log.warn("Failed to stop notification mode for {}", readerName);
+                            ctx.status(500).json(Map.of(
+                                "success", false,
+                                "error", "Failed to stop notification mode"
+                            ));
+                            return;
+                        }
+
+                        ctx.json(Map.of(
+                            "success", true,
+                            "message", "Notification mode stopped"
+                        ));
+                    } catch (Exception e) {
+                        log.error("Failed to stop notification mode for {}", readerName, e);
+                        ctx.status(500).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                    }
+                });
+
+                config.routes.get("/notification/events/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    log.debug("Polling notification events for {}", readerName);
+                    
+                    if (managedReader == null || !managedReader.isNotificationModeActive()) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "No active notification session for reader: " + readerName
+                        ));
+                        return;
+                    }
+
+                    NotificationListener listener = managedReader.getNotificationListener();
+                    List<NotificationListener.NotificationEvent> events = listener.pollEvents();
+
+                    log.debug("Notification poll for {} returned {} events (listener connected={})", 
+                        readerName, events.size(), listener.isConnected());
+
+                    ctx.json(Map.of(
+                        "success", true,
+                        "readerName", readerName,
+                        "eventCount", events.size(),
+                        "isConnected", listener.isConnected(),
+                        "events", events
+                    ));
+                });
+
+                config.routes.get("/notification/status", ctx -> {
+                    List<Map<String, Object>> sessions = new ArrayList<>();
+                    
+                    for (Map.Entry<String, ReaderManager.ManagedReader> entry : readerManager.getAllReaders().entrySet()) {
+                        ReaderManager.ManagedReader reader = entry.getValue();
+                        if (reader.isNotificationModeActive()) {
+                            NotificationListener listener = reader.getNotificationListener();
+                            sessions.add(Map.of(
+                                "readerName", entry.getKey(),
+                                "port", reader.getListenerPort(),
+                                "isConnected", listener.isConnected(),
+                                "queuedEvents", listener.getEventCount()
+                            ));
+                        }
+                    }
+
+                    ctx.json(Map.of(
+                        "success", true,
+                        "activeSessions", sessions.size(),
+                        "sessions", sessions
+                    ));
+                });
+                
+
+                
+                // MAIN ENDPOINTS
+                config.routes.get("/readers", ctx -> {
+                    List<Map<String, Object>> readerList = new ArrayList<>();
+                    log.debug("Listing registered readers");
+                    
+                    for (Map.Entry<String, ReaderManager.ManagedReader> entry : readerManager.getAllReaders().entrySet()) {
+                        ReaderManager.ManagedReader managedReader = entry.getValue();
+                        ReaderConfig readerConfig = managedReader.getConfig();
+                        
+                        // Check connection status
+                        boolean isConnected = managedReader.isConnectedFast();
+                        String connectionStatus = managedReader.getConnectionStatusFast();
+                        
+                        Map<String, Object> readerInfo = new java.util.LinkedHashMap<>();
+                        readerInfo.put("name", readerConfig.getName());
+                        readerInfo.put("address", readerConfig.getAddress());
+                        readerInfo.put("port", readerConfig.getPort());
+                        readerInfo.put("mode", readerConfig.getMode());
+                        readerInfo.put("antennas", readerConfig.getAntennas());
+                        readerInfo.put("antennaMask", String.format("0x%02X", readerConfig.getAntennaMask()));
+                        readerInfo.put("isConnected", isConnected);
+                        readerInfo.put("connectionStatus", connectionStatus);
+                        if (!isConnected && managedReader.getLastConnectionError() != null) {
+                            readerInfo.put("lastConnectionError", managedReader.getLastConnectionError());
+                        }
+                        readerInfo.put("notificationActive", managedReader.isNotificationModeActive());
+                        if (managedReader.isNotificationModeActive()) {
+                            readerInfo.put("notificationPort", managedReader.getListenerPort());
+                        }
+                        
+                        readerList.add(readerInfo);
+                    }
+                    
+                    ctx.json(Map.of(
+                        "success", true,
+                        "readerCount", readerList.size(),
+                        "readers", readerList
+                    ));
+                });
+
+                config.routes.get("/testread/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    log.info("/testread invoked for {}", readerName);
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    if (managedReader == null) {
+                        ctx.status(404).result("Reader not found");
+                        return;
+                    }
+
+                    try {
+                        ReaderModule reader = managedReader.getModule();
+                        
+                        InventoryParam inventoryParam = new InventoryParam();
+                        inventoryParam.setAntennas(managedReader.getConfig().getAntennaMask());
+
+                        // do this code 3 times
+                        //for (int d = 0; d < 3; d++) {
+                            //log.info(reader.isConnected() ? ">>> Reader is connected." : "Reader is not connected.");
+
+                            int returnCode = reader.hm().inventory(true, inventoryParam);
+                            log.debug("Reader last error state: {}", reader.lastErrorStatusText());
+                            if (returnCode != ErrorCode.Ok) {
+                                ctx.status(500).result("Inventory command failed: " + returnCode);
+                                return;
+                            }
+
+                            log.info("Inventory successful: {} items found.", reader.hm().itemCount());
+                            for (int i = 0; i < reader.hm().itemCount(); i++) {
+                                TagItem tagItem =  reader.hm().tagItem(i);
+                                if (!tagItem.isValid()) {
+                                    log.warn("Invalid tag item at index {}", i);
+                                    continue;
+                                }
+                                log.debug("Tag {}: {}", i + 1, tagItem.iddToHexString());
+                                //RssiItem
+                                tagItem.rssiValues().forEach(rssiItem -> {
+                                    log.debug(" with Antenna {}: {} dBm", rssiItem.antennaNumber(), rssiItem.rssi());
+
+                                });
+                                
+                                try (ThBase tagHandler = reader.hm().createTagHandler(i)) {
+                                    if (tagHandler == null) {
+                                        log.warn("Failed to create tag handler for tag at index {}", i);
+                                        continue;
+                                    } else if (tagHandler instanceof ThEpcClass1Gen2 epcTag) {
+                                        log.debug("Tag handler type: EPC Class 1 Gen 2");
+                                        if(epcTag.isEpcAndTid()) {
+                                            log.debug("EPC: {}", epcTag.epcToHexString());
+                                            log.debug("TID: {}", epcTag.tidToHexString());
+                                        } else {
+                                            log.debug("EPC: {}", epcTag.epcToHexString());
+
+                                        }
+                                        Thread.sleep(200); // Small delay to ensure tag is ready for next command
+                                        // Read blocks
+                                        int blocksToRead = 10; // Number of blocks to read
+                                        int startBlock = 0; // Starting block address
+                                        Bank bank = Bank.Epc; // Memory bank to read from
+                                        DataBuffer data = new DataBuffer(); // Each block is 2 bytes
+                                        returnCode = epcTag.readMultipleBlocks(bank, startBlock, blocksToRead, data);
+                                        log.debug("Read multiple blocks return code: {}", returnCode);
+                                        log.debug("Last error state: {}", reader.lastErrorStatusText());
+                                        log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
+                                        log.debug("Read data: {}", data.toHexString(" "));
+
+
+                                        Thread.sleep(200); // Small delay to ensure tag is ready for next command
+                                        // example byte array
+                                        byte[] newEpc = new byte[] { (byte)0x11, (byte)0x22, (byte)0x33, (byte)0x44, (byte)0x55, (byte)0x66 };
+                                        DataBuffer dataToWrite = new DataBuffer(newEpc);
+                                        returnCode = epcTag.writeMultipleBlocks(bank, 2, 3, dataToWrite);
+
+                                        log.debug("Write multiple blocks return code: {}", returnCode);
+                                        log.debug("Last error state: {}", reader.lastErrorStatusText());
+                                        log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
+                                        log.debug("Write data: {}", dataToWrite.toHexString(" "));
+
+
+                                    } else {
+                                        log.debug("Tag handler type: {}", tagHandler.tagHandlerType());
+                                    }
+
+                                    log.debug("Transponder name: {}", tagHandler.transponderName());
+                                }
+
+                            }
+
+                        // Thread.sleep(500);
+                        //}
+
+                        ctx.json(new String[]{"done"});
+                    } catch (Exception e) {
+                        log.error("/testread failed for {}", readerName, e);
+                        ctx.status(500).result("Error: " + e.getMessage());
+                        //e.printStackTrace();
+                    }
+                });
+
+
+                
+
+                config.routes.get("/inventory/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    log.info("Inventory requested for {}", readerName);
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    if (managedReader == null) {
+                        ctx.status(404).json(new InventoryResponse(false, "Reader not found", 0, null));
+                        return;
+                    }
+
+                    try {
+                        long inventoryStartNanos = System.nanoTime();
+
+                        // Use executeWithReconnect to handle connection failures automatically
+                        List<Tag> tags = managedReader.executeWithReconnect(reader -> {
+                            InventoryParam inventoryParam = new InventoryParam();
+                            inventoryParam.setAntennas(managedReader.getConfig().getAntennaMask());
+
+                            int returnCode = reader.hm().inventory(true, inventoryParam);
+                            
+                            // "No transponder in reader field" is a normal condition, not an error
+                            if (returnCode != ErrorCode.Ok) {
+                                String errorMsg = reader.lastErrorStatusText();
+                                
+                                // Check if this is just "no tags found" - this is normal, not an error
+                                if (errorMsg != null && errorMsg.toLowerCase().contains("no transponder")) {
+                                    log.debug("No tags found in reader field for {}", readerName);
+                                    return new ArrayList<>(); // Return empty list, not an error
+                                }
+                                
+                                // For other errors, throw exception
+                                throw new Exception("Inventory failed: " + errorMsg);
+                            }
+
+                            long tagCount = reader.hm().itemCount();
+                            List<Tag> result = new ArrayList<>();
+
+                            for (int i = 0; i < tagCount; i++) {
+                                TagItem tagItem = reader.hm().tagItem(i);
+                                if (!tagItem.isValid()) {
+                                    continue;
+                                }
+
+                                String idd = tagItem.iddToHexString();
+                                
+                                // Create Tag instance (uses global password configuration)
+                                Tag tag = TagFactory.createTagFromHexString(idd);
+                                
+                                // Extract and set RSSI values
+                                List<Tag.AntennaRssi> rssiList = new ArrayList<>();
+                                tagItem.rssiValues().forEach(rssiItem -> {
+                                    rssiList.add(new Tag.AntennaRssi(
+                                        rssiItem.antennaNumber(), 
+                                        rssiItem.rssi()
+                                    ));
+                                });
+                                tag.setRssiValues(rssiList);
+                                
+                                // Log tag info for debugging
+                                log.debug("Tag: {}, Type: {}, MediaId: {}, Secured: {}", 
+                                    tag.getEpcHexString(), tag.getTagType(), tag.getMediaId(), tag.isSecured());
+
+                                result.add(tag);
+                            }
+
+                            return result;
+                        });
+
+                        long inventoryDurationMs = (System.nanoTime() - inventoryStartNanos) / 1_000_000;
+                        log.info("Inventory for {} returned {} tags in {} ms", readerName, tags.size(), inventoryDurationMs);
+
+                        ctx.json(new InventoryResponse(true, "Inventory successful", tags.size(), tags));
+                    } catch (ReaderManager.ReaderOperationException e) {
+                        log.error("Inventory failed for {}", readerName, e);
+                        ctx.status(500).json(new InventoryResponse(false, e.getMessage(), 0, null));
+                    }
+                });
+
+                config.routes.post("/secure/{readerName}", ctx -> {
+                    log.info("Secure requested for {}", ctx.pathParam("readerName"));
+                    handleSecurityOperationWithReconnect(ctx, readerManager, true);
+                });
+
+                config.routes.post("/unsecure/{readerName}", ctx -> {
+                    log.info("Unsecure requested for {}", ctx.pathParam("readerName"));
+                    handleSecurityOperationWithReconnect(ctx, readerManager, false);
+                });
+
+                config.routes.post("/initialize/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    String mediaId = ctx.queryParam("mediaId");
+                    String format = ctx.queryParam("format"); // "DE290", "CD290", "DE6", "DE290F", "DE386" (optional)
+                    String securedStr = ctx.queryParam("secured"); // "true" or "false" (optional)
+                    
+                    if (mediaId == null || mediaId.isEmpty()) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Missing 'mediaId' query parameter"
+                        ));
+                        return;
+                    }
+
+                    // Use configured default if format not specified
+                    boolean secured = securedStr == null || securedStr.equalsIgnoreCase("true");
+                    
+                    if (format == null || format.isEmpty()) {
+                        // Use configured default from YAML
+                        format = ConfigLoader.getDefaultTagFormat();
+                    }
+
+                    log.info("Initialize requested for reader {} with mediaId {} format {} secured {}", 
+                        readerName, mediaId, format, secured);
+
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    try {
+                        // Create tag instance for format validation
+                        Tag newTag = createTagForInitialization(format, mediaId, secured);
+                        
+                        // Validate media ID format for this tag type
+                        newTag.validateMediaIdFormat(mediaId);
+                        
+                        managedReader.executeWithReconnect(reader -> {
+                            initializeTag(reader, managedReader.getConfig(), newTag);
+                        });
+
+                        log.info("Initialized tag on reader {}: epc={} mediaId={} format={} secured={}",
+                            readerName, newTag.getEpcHexString(), mediaId, format, secured);
+
+                        ctx.json(Map.of(
+                            "success", true,
+                            "message", "Tag initialized successfully",
+                            "epc", newTag.getEpcHexString(),
+                            "pc", newTag.getPCHexString(),
+                            "mediaId", mediaId,
+                            "secured", secured,
+                            "format", format,
+                            "tagType", newTag.getTagType()
+                        ));
+
+                    } catch (NumberFormatException e) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Invalid media ID format - " + e.getMessage()
+                        ));
+                    } catch (IllegalArgumentException e) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                    } catch (ReaderManager.ReaderOperationException e) {
+                        log.error("Failed to initialize tag for {}", readerName, e);
+                        ctx.status(500).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                    }
+                });
+
+                config.routes.post("/edit/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    String epcHex = ctx.queryParam("epc");
+                    String newMediaId = ctx.queryParam("mediaId");
+                    
+                    if (epcHex == null || epcHex.isEmpty()) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Missing 'epc' query parameter"
+                        ));
+                        return;
+                    }
+
+                    if (newMediaId == null || newMediaId.isEmpty()) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Missing 'mediaId' query parameter"
+                        ));
+                        return;
+                    }
+
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    log.info("Edit requested for reader {} with EPC {} -> mediaId {}", readerName, epcHex, newMediaId);
+
+                    try {
+                        Tag oldTag = TagFactory.createTagFromHexString(epcHex);
+                        
+                        if (oldTag instanceof RawTag) {
+                            ctx.status(400).json(Map.of(
+                                "success", false,
+                                "error", "Tag format not recognized - use /initialize for unformatted tags"
+                            ));
+                            return;
+                        }
+
+                        Tag newTag = TagFactory.createTagFromHexString(epcHex);
+                        
+                        // Validate media ID format for this tag type BEFORE attempting to set it
+                        newTag.validateMediaIdFormat(newMediaId);
+                        newTag.setMediaId(newMediaId);
+                        
+                        managedReader.executeWithReconnect(reader -> {
+                            editTag(reader, managedReader.getConfig(), epcHex, oldTag, newTag);
+                        });
+
+                        log.info("Edited tag on reader {}: {} -> {} (mediaId={})", readerName, epcHex, newTag.getEpcHexString(), newMediaId);
+
+                        ctx.json(Map.of(
+                            "success", true,
+                            "message", "Tag updated successfully",
+                            "oldEpc", epcHex,
+                            "newEpc", newTag.getEpcHexString(),
+                            "mediaId", newMediaId,
+                            "tagType", newTag.getTagType()
+                        ));
+
+                    } catch (IllegalArgumentException e) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Invalid media ID for this tag format: " + e.getMessage()
+                        ));
+                    } catch (ReaderManager.ReaderOperationException e) {
+                        ctx.status(500).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                    }
+                });
+
+                config.routes.post("/clear/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    String epcHex = ctx.queryParam("epc");
+                    
+                    if (epcHex == null || epcHex.isEmpty()) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Missing 'epc' query parameter"
+                        ));
+                        return;
+                    }
+
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    log.info("Clear requested for reader {} and EPC {}", readerName, epcHex);
+
+                    try {
+                        Tag oldTag = TagFactory.createTagFromHexString(epcHex);
+                        
+                        Map<String, String> result = managedReader.executeWithReconnect(reader -> {
+                            return clearTag(reader, managedReader.getConfig(), epcHex, oldTag);
+                        });
+
+                        log.info("Cleared tag on reader {}: oldEpc={} newEpc={} newPc={} tid={}", 
+                            readerName, epcHex, result.get("newEpc"), result.get("newPc"), result.get("tid"));
+
+                        ctx.json(Map.of(
+                            "success", true,
+                            "message", "Tag cleared successfully - passwords zeroed and EPC restored to TID",
+                            "oldEpc", epcHex,
+                            "newEpc", result.get("newEpc"),
+                            "newPc", result.get("newPc"),
+                            "tid", result.get("tid")
+                        ));
+
+                    } catch (ReaderManager.ReaderOperationException e) {
+                        ctx.status(500).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                        //e.printStackTrace();
+                    }
+                });
+
+                config.routes.get("/analyze/{readerName}", ctx -> {
+                    String readerName = ctx.pathParam("readerName");
+                    String epcHex = ctx.queryParam("epc");
+                    
+                    if (epcHex == null || epcHex.isEmpty()) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Missing 'epc' query parameter"
+                        ));
+                        return;
+                    }
+
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    log.info("Analyze requested for reader {} and EPC {}", readerName, epcHex);
+
+                    try {
+                        Tag theoreticalTag = TagFactory.createTagFromHexString(epcHex);
+                        
+                        Map<String, Object> analysis = managedReader.executeWithReconnect(reader -> {
+                            return analyzeTag(reader, managedReader.getConfig(), epcHex, theoreticalTag);
+                        });
+
+                        log.info("Analyze completed for reader {} and EPC {} (tagType={})", readerName, epcHex, theoreticalTag.getTagType());
+
+                        ctx.json(Map.of(
+                            "success", true,
+                            "epc", epcHex,
+                            "analysis", analysis
+                        ));
+
+                    } catch (ReaderManager.ReaderOperationException e) {
+                        ctx.status(500).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                        //e.printStackTrace();
+                    }
+                });
+
             }
-        )
-                .get("/", ctx -> ctx.result("Hello Feig!"))
-                .start(7070);
+        ).start(7070);
+                
+                
 
+        
         log.info("Javalin server started on port 7070");
-
 
         // Register shutdown hook and event to close all readers
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -126,647 +773,7 @@ public class Main {
             app.stop();
             log.info("Javalin server stopped");
         }));
-        
-        app.events(event -> {
-            event.serverStopping(() -> {
-                log.info("Shutting down - closing all readers...");
-                readerManager.closeAll();
-                log.info("All readers closed");
-            });
-        });
-
-        app.post("/notification/start/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            log.info("Notification start requested for {}", readerName);
-            
-            if (managedReader == null) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "Reader not found: " + readerName
-                ));
-                return;
-            }
-
-            if (managedReader.isNotificationModeActive()) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Notification mode already running for this reader"
-                ));
-                return;
-            }
-
-            try {
-                int port = readerManager.allocateListenerPort();
-                boolean started = managedReader.startNotificationMode(port);
-                
-                if (!started) {
-                    log.warn("Failed to start notification mode for {} on port {}", readerName, port);
-                    ctx.status(500).json(Map.of(
-                        "success", false,
-                        "error", "Failed to start notification mode"
-                    ));
-                    return;
-                }
-
-                ctx.json(Map.of(
-                    "success", true,
-                    "message", "Notification mode started",
-                    "port", port,
-                    "readerName", readerName
-                ));
-            } catch (Exception e) {
-                log.error("Failed to start notification mode for {}", readerName, e);
-                ctx.status(500).json(Map.of(
-                    "success", false,
-                    "error", e.getMessage()
-                ));
-            }
-        });
-
-        app.post("/notification/stop/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            log.info("Notification stop requested for {}", readerName);
-            
-            if (managedReader == null) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "Reader not found: " + readerName
-                ));
-                return;
-            }
-
-            if (!managedReader.isNotificationModeActive()) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "No active notification session for reader: " + readerName
-                ));
-                return;
-            }
-
-            try {
-                boolean stopped = managedReader.stopNotificationMode();
-                
-                if (!stopped) {
-                    log.warn("Failed to stop notification mode for {}", readerName);
-                    ctx.status(500).json(Map.of(
-                        "success", false,
-                        "error", "Failed to stop notification mode"
-                    ));
-                    return;
-                }
-
-                ctx.json(Map.of(
-                    "success", true,
-                    "message", "Notification mode stopped"
-                ));
-            } catch (Exception e) {
-                log.error("Failed to stop notification mode for {}", readerName, e);
-                ctx.status(500).json(Map.of(
-                    "success", false,
-                    "error", e.getMessage()
-                ));
-            }
-        });
-
-        app.get("/notification/events/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            log.debug("Polling notification events for {}", readerName);
-            
-            if (managedReader == null || !managedReader.isNotificationModeActive()) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "No active notification session for reader: " + readerName
-                ));
-                return;
-            }
-
-            NotificationListener listener = managedReader.getNotificationListener();
-            List<NotificationListener.NotificationEvent> events = listener.pollEvents();
-
-            log.debug("Notification poll for {} returned {} events (listener connected={})", 
-                readerName, events.size(), listener.isConnected());
-
-            ctx.json(Map.of(
-                "success", true,
-                "readerName", readerName,
-                "eventCount", events.size(),
-                "isConnected", listener.isConnected(),
-                "events", events
-            ));
-        });
-
-        app.get("/notification/status", ctx -> {
-            List<Map<String, Object>> sessions = new ArrayList<>();
-            
-            for (Map.Entry<String, ReaderManager.ManagedReader> entry : readerManager.getAllReaders().entrySet()) {
-                ReaderManager.ManagedReader reader = entry.getValue();
-                if (reader.isNotificationModeActive()) {
-                    NotificationListener listener = reader.getNotificationListener();
-                    sessions.add(Map.of(
-                        "readerName", entry.getKey(),
-                        "port", reader.getListenerPort(),
-                        "isConnected", listener.isConnected(),
-                        "queuedEvents", listener.getEventCount()
-                    ));
-                }
-            }
-
-            ctx.json(Map.of(
-                "success", true,
-                "activeSessions", sessions.size(),
-                "sessions", sessions
-            ));
-        });
-        
-
-        
-
-        app.get("/readers", ctx -> {
-            List<Map<String, Object>> readerList = new ArrayList<>();
-            log.debug("Listing registered readers");
-            
-            for (Map.Entry<String, ReaderManager.ManagedReader> entry : readerManager.getAllReaders().entrySet()) {
-                ReaderManager.ManagedReader managedReader = entry.getValue();
-                ReaderConfig config = managedReader.getConfig();
-                
-                // Check connection status
-                boolean isConnected = managedReader.isConnectedFast();
-                String connectionStatus = managedReader.getConnectionStatusFast();
-                
-                Map<String, Object> readerInfo = new java.util.LinkedHashMap<>();
-                readerInfo.put("name", config.getName());
-                readerInfo.put("address", config.getAddress());
-                readerInfo.put("port", config.getPort());
-                readerInfo.put("mode", config.getMode());
-                readerInfo.put("antennas", config.getAntennas());
-                readerInfo.put("antennaMask", String.format("0x%02X", config.getAntennaMask()));
-                readerInfo.put("isConnected", isConnected);
-                readerInfo.put("connectionStatus", connectionStatus);
-                if (!isConnected && managedReader.getLastConnectionError() != null) {
-                    readerInfo.put("lastConnectionError", managedReader.getLastConnectionError());
-                }
-                readerInfo.put("notificationActive", managedReader.isNotificationModeActive());
-                if (managedReader.isNotificationModeActive()) {
-                    readerInfo.put("notificationPort", managedReader.getListenerPort());
-                }
-                
-                readerList.add(readerInfo);
-            }
-            
-            ctx.json(Map.of(
-                "success", true,
-                "readerCount", readerList.size(),
-                "readers", readerList
-            ));
-        });
-
-        app.get("/testread/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            log.info("/testread invoked for {}", readerName);
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            if (managedReader == null) {
-                ctx.status(404).result("Reader not found");
-                return;
-            }
-
-            try {
-                ReaderModule reader = managedReader.getModule();
-                
-                InventoryParam inventoryParam = new InventoryParam();
-                inventoryParam.setAntennas(managedReader.getConfig().getAntennaMask());
-
-                // do this code 3 times
-                //for (int d = 0; d < 3; d++) {
-                    //log.info(reader.isConnected() ? ">>> Reader is connected." : "Reader is not connected.");
-
-                    int returnCode = reader.hm().inventory(true, inventoryParam);
-                    log.debug("Reader last error state: {}", reader.lastErrorStatusText());
-                    if (returnCode != ErrorCode.Ok) {
-                        ctx.status(500).result("Inventory command failed: " + returnCode);
-                        return;
-                    }
-
-                    log.info("Inventory successful: {} items found.", reader.hm().itemCount());
-                    for (int i = 0; i < reader.hm().itemCount(); i++) {
-                        TagItem tagItem =  reader.hm().tagItem(i);
-                        if (!tagItem.isValid()) {
-                            log.warn("Invalid tag item at index {}", i);
-                            continue;
-                        }
-                        log.debug("Tag {}: {}", i + 1, tagItem.iddToHexString());
-                        //RssiItem
-                        tagItem.rssiValues().forEach(rssiItem -> {
-                            log.debug(" with Antenna {}: {} dBm", rssiItem.antennaNumber(), rssiItem.rssi());
-
-                        });
-                        
-                        try (ThBase tagHandler = reader.hm().createTagHandler(i)) {
-                            if (tagHandler == null) {
-                                log.warn("Failed to create tag handler for tag at index {}", i);
-                                continue;
-                            } else if (tagHandler instanceof ThEpcClass1Gen2 epcTag) {
-                                log.debug("Tag handler type: EPC Class 1 Gen 2");
-                                if(epcTag.isEpcAndTid()) {
-                                    log.debug("EPC: {}", epcTag.epcToHexString());
-                                    log.debug("TID: {}", epcTag.tidToHexString());
-                                } else {
-                                    log.debug("EPC: {}", epcTag.epcToHexString());
-
-                                }
-                                Thread.sleep(200); // Small delay to ensure tag is ready for next command
-                                // Read blocks
-                                int blocksToRead = 10; // Number of blocks to read
-                                int startBlock = 0; // Starting block address
-                                Bank bank = Bank.Epc; // Memory bank to read from
-                                DataBuffer data = new DataBuffer(); // Each block is 2 bytes
-                                returnCode = epcTag.readMultipleBlocks(bank, startBlock, blocksToRead, data);
-                                log.debug("Read multiple blocks return code: {}", returnCode);
-                                log.debug("Last error state: {}", reader.lastErrorStatusText());
-                                log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
-                                log.debug("Read data: {}", data.toHexString(" "));
-
-
-                                Thread.sleep(200); // Small delay to ensure tag is ready for next command
-                                // example byte array
-                                byte[] newEpc = new byte[] { (byte)0x11, (byte)0x22, (byte)0x33, (byte)0x44, (byte)0x55, (byte)0x66 };
-                                DataBuffer dataToWrite = new DataBuffer(newEpc);
-                                returnCode = epcTag.writeMultipleBlocks(bank, 2, 3, dataToWrite);
-
-                                log.debug("Write multiple blocks return code: {}", returnCode);
-                                log.debug("Last error state: {}", reader.lastErrorStatusText());
-                                log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
-                                log.debug("Write data: {}", dataToWrite.toHexString(" "));
-
-
-                            } else {
-                                log.debug("Tag handler type: {}", tagHandler.tagHandlerType());
-                            }
-
-                            log.debug("Transponder name: {}", tagHandler.transponderName());
-                        }
-
-                    }
-
-                // Thread.sleep(500);
-                //}
-
-                ctx.json(new String[]{"done"});
-            } catch (Exception e) {
-                log.error("/testread failed for {}", readerName, e);
-                ctx.status(500).result("Error: " + e.getMessage());
-                //e.printStackTrace();
-            }
-        });
-
-
-        
-
-        app.get("/inventory/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            log.info("Inventory requested for {}", readerName);
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            if (managedReader == null) {
-                ctx.status(404).json(new InventoryResponse(false, "Reader not found", 0, null));
-                return;
-            }
-
-            try {
-                long inventoryStartNanos = System.nanoTime();
-
-                // Use executeWithReconnect to handle connection failures automatically
-                List<Tag> tags = managedReader.executeWithReconnect(reader -> {
-                    InventoryParam inventoryParam = new InventoryParam();
-                    inventoryParam.setAntennas(managedReader.getConfig().getAntennaMask());
-
-                    int returnCode = reader.hm().inventory(true, inventoryParam);
-                    
-                    // "No transponder in reader field" is a normal condition, not an error
-                    if (returnCode != ErrorCode.Ok) {
-                        String errorMsg = reader.lastErrorStatusText();
-                        
-                        // Check if this is just "no tags found" - this is normal, not an error
-                        if (errorMsg != null && errorMsg.toLowerCase().contains("no transponder")) {
-                            log.debug("No tags found in reader field for {}", readerName);
-                            return new ArrayList<>(); // Return empty list, not an error
-                        }
-                        
-                        // For other errors, throw exception
-                        throw new Exception("Inventory failed: " + errorMsg);
-                    }
-
-                    long tagCount = reader.hm().itemCount();
-                    List<Tag> result = new ArrayList<>();
-
-                    for (int i = 0; i < tagCount; i++) {
-                        TagItem tagItem = reader.hm().tagItem(i);
-                        if (!tagItem.isValid()) {
-                            continue;
-                        }
-
-                        String idd = tagItem.iddToHexString();
-                        
-                        // Create Tag instance (uses global password configuration)
-                        Tag tag = TagFactory.createTagFromHexString(idd);
-                        
-                        // Extract and set RSSI values
-                        List<Tag.AntennaRssi> rssiList = new ArrayList<>();
-                        tagItem.rssiValues().forEach(rssiItem -> {
-                            rssiList.add(new Tag.AntennaRssi(
-                                rssiItem.antennaNumber(), 
-                                rssiItem.rssi()
-                            ));
-                        });
-                        tag.setRssiValues(rssiList);
-                        
-                        // Log tag info for debugging
-                        log.debug("Tag: {}, Type: {}, MediaId: {}, Secured: {}", 
-                            tag.getEpcHexString(), tag.getTagType(), tag.getMediaId(), tag.isSecured());
-
-                        result.add(tag);
-                    }
-
-                    return result;
-                });
-
-                long inventoryDurationMs = (System.nanoTime() - inventoryStartNanos) / 1_000_000;
-                log.info("Inventory for {} returned {} tags in {} ms", readerName, tags.size(), inventoryDurationMs);
-
-                ctx.json(new InventoryResponse(true, "Inventory successful", tags.size(), tags));
-            } catch (ReaderManager.ReaderOperationException e) {
-                log.error("Inventory failed for {}", readerName, e);
-                ctx.status(500).json(new InventoryResponse(false, e.getMessage(), 0, null));
-            }
-        });
-
-        app.post("/secure/{readerName}", ctx -> {
-            log.info("Secure requested for {}", ctx.pathParam("readerName"));
-            handleSecurityOperationWithReconnect(ctx, readerManager, true);
-        });
-
-        app.post("/unsecure/{readerName}", ctx -> {
-            log.info("Unsecure requested for {}", ctx.pathParam("readerName"));
-            handleSecurityOperationWithReconnect(ctx, readerManager, false);
-        });
-
-        app.post("/initialize/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            String mediaId = ctx.queryParam("mediaId");
-            String format = ctx.queryParam("format"); // "DE290", "CD290", "DE6", "DE290F", "DE386" (optional)
-            String securedStr = ctx.queryParam("secured"); // "true" or "false" (optional)
-            
-            if (mediaId == null || mediaId.isEmpty()) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Missing 'mediaId' query parameter"
-                ));
-                return;
-            }
-
-            // Use configured default if format not specified
-            boolean secured = securedStr == null || securedStr.equalsIgnoreCase("true");
-            
-            if (format == null || format.isEmpty()) {
-                // Use configured default from YAML
-                format = ConfigLoader.getDefaultTagFormat();
-            }
-
-            log.info("Initialize requested for reader {} with mediaId {} format {} secured {}", 
-                readerName, mediaId, format, secured);
-
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            if (managedReader == null) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "Reader not found: " + readerName
-                ));
-                return;
-            }
-
-            try {
-                // Create tag instance for format validation
-                Tag newTag = createTagForInitialization(format, mediaId, secured);
-                
-                // Validate media ID format for this tag type
-                newTag.validateMediaIdFormat(mediaId);
-                
-                managedReader.executeWithReconnect(reader -> {
-                    initializeTag(reader, managedReader.getConfig(), newTag);
-                });
-
-                log.info("Initialized tag on reader {}: epc={} mediaId={} format={} secured={}",
-                    readerName, newTag.getEpcHexString(), mediaId, format, secured);
-
-                ctx.json(Map.of(
-                    "success", true,
-                    "message", "Tag initialized successfully",
-                    "epc", newTag.getEpcHexString(),
-                    "pc", newTag.getPCHexString(),
-                    "mediaId", mediaId,
-                    "secured", secured,
-                    "format", format,
-                    "tagType", newTag.getTagType()
-                ));
-
-            } catch (NumberFormatException e) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Invalid media ID format - " + e.getMessage()
-                ));
-            } catch (IllegalArgumentException e) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", e.getMessage()
-                ));
-            } catch (ReaderManager.ReaderOperationException e) {
-                log.error("Failed to initialize tag for {}", readerName, e);
-                ctx.status(500).json(Map.of(
-                    "success", false,
-                    "error", e.getMessage()
-                ));
-            }
-        });
-
-        app.post("/edit/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            String epcHex = ctx.queryParam("epc");
-            String newMediaId = ctx.queryParam("mediaId");
-            
-            if (epcHex == null || epcHex.isEmpty()) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Missing 'epc' query parameter"
-                ));
-                return;
-            }
-
-            if (newMediaId == null || newMediaId.isEmpty()) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Missing 'mediaId' query parameter"
-                ));
-                return;
-            }
-
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            if (managedReader == null) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "Reader not found: " + readerName
-                ));
-                return;
-            }
-
-            log.info("Edit requested for reader {} with EPC {} -> mediaId {}", readerName, epcHex, newMediaId);
-
-            try {
-                Tag oldTag = TagFactory.createTagFromHexString(epcHex);
-                
-                if (oldTag instanceof RawTag) {
-                    ctx.status(400).json(Map.of(
-                        "success", false,
-                        "error", "Tag format not recognized - use /initialize for unformatted tags"
-                    ));
-                    return;
-                }
-
-                Tag newTag = TagFactory.createTagFromHexString(epcHex);
-                
-                // Validate media ID format for this tag type BEFORE attempting to set it
-                newTag.validateMediaIdFormat(newMediaId);
-                newTag.setMediaId(newMediaId);
-                
-                managedReader.executeWithReconnect(reader -> {
-                    editTag(reader, managedReader.getConfig(), epcHex, oldTag, newTag);
-                });
-
-                log.info("Edited tag on reader {}: {} -> {} (mediaId={})", readerName, epcHex, newTag.getEpcHexString(), newMediaId);
-
-                ctx.json(Map.of(
-                    "success", true,
-                    "message", "Tag updated successfully",
-                    "oldEpc", epcHex,
-                    "newEpc", newTag.getEpcHexString(),
-                    "mediaId", newMediaId,
-                    "tagType", newTag.getTagType()
-                ));
-
-            } catch (IllegalArgumentException e) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Invalid media ID for this tag format: " + e.getMessage()
-                ));
-            } catch (ReaderManager.ReaderOperationException e) {
-                ctx.status(500).json(Map.of(
-                    "success", false,
-                    "error", e.getMessage()
-                ));
-            }
-        });
-
-        app.post("/clear/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            String epcHex = ctx.queryParam("epc");
-            
-            if (epcHex == null || epcHex.isEmpty()) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Missing 'epc' query parameter"
-                ));
-                return;
-            }
-
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            if (managedReader == null) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "Reader not found: " + readerName
-                ));
-                return;
-            }
-
-            log.info("Clear requested for reader {} and EPC {}", readerName, epcHex);
-
-            try {
-                Tag oldTag = TagFactory.createTagFromHexString(epcHex);
-                
-                Map<String, String> result = managedReader.executeWithReconnect(reader -> {
-                    return clearTag(reader, managedReader.getConfig(), epcHex, oldTag);
-                });
-
-                log.info("Cleared tag on reader {}: oldEpc={} newEpc={} newPc={} tid={}", 
-                    readerName, epcHex, result.get("newEpc"), result.get("newPc"), result.get("tid"));
-
-                ctx.json(Map.of(
-                    "success", true,
-                    "message", "Tag cleared successfully - passwords zeroed and EPC restored to TID",
-                    "oldEpc", epcHex,
-                    "newEpc", result.get("newEpc"),
-                    "newPc", result.get("newPc"),
-                    "tid", result.get("tid")
-                ));
-
-            } catch (ReaderManager.ReaderOperationException e) {
-                ctx.status(500).json(Map.of(
-                    "success", false,
-                    "error", e.getMessage()
-                ));
-                //e.printStackTrace();
-            }
-        });
-
-        app.get("/analyze/{readerName}", ctx -> {
-            String readerName = ctx.pathParam("readerName");
-            String epcHex = ctx.queryParam("epc");
-            
-            if (epcHex == null || epcHex.isEmpty()) {
-                ctx.status(400).json(Map.of(
-                    "success", false,
-                    "error", "Missing 'epc' query parameter"
-                ));
-                return;
-            }
-
-            ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
-            if (managedReader == null) {
-                ctx.status(404).json(Map.of(
-                    "success", false,
-                    "error", "Reader not found: " + readerName
-                ));
-                return;
-            }
-
-            log.info("Analyze requested for reader {} and EPC {}", readerName, epcHex);
-
-            try {
-                Tag theoreticalTag = TagFactory.createTagFromHexString(epcHex);
-                
-                Map<String, Object> analysis = managedReader.executeWithReconnect(reader -> {
-                    return analyzeTag(reader, managedReader.getConfig(), epcHex, theoreticalTag);
-                });
-
-                log.info("Analyze completed for reader {} and EPC {} (tagType={})", readerName, epcHex, theoreticalTag.getTagType());
-
-                ctx.json(Map.of(
-                    "success", true,
-                    "epc", epcHex,
-                    "analysis", analysis
-                ));
-
-            } catch (ReaderManager.ReaderOperationException e) {
-                ctx.status(500).json(Map.of(
-                    "success", false,
-                    "error", e.getMessage()
-                ));
-                //e.printStackTrace();
-            }
-        });
-
-        app.get("/test", ctx -> {
-            ctx.result("Test successful");
-        });
+ 
     }
 
     /**
