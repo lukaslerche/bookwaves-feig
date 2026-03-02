@@ -6,6 +6,7 @@ import de.feig.fedm.IReaderListener;
 import de.feig.fedm.PeerInfo;
 import de.feig.fedm.ReaderModule;
 import de.feig.fedm.TagEventItem;
+import de.feig.fedm.TagItem;
 import de.feig.fedm.EventType;
 import de.feig.fedm.RssiItem;
 import de.feig.fedm.types.IntRef;
@@ -14,7 +15,12 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.concurrent.locks.Lock;
 
 public class NotificationListener implements IReaderListener, IConnectListener {
@@ -22,14 +28,18 @@ public class NotificationListener implements IReaderListener, IConnectListener {
     private static final Logger log = LoggerFactory.getLogger(NotificationListener.class);
     private final ReaderModule reader;
     private final ConcurrentLinkedQueue<NotificationEvent> eventQueue;
+    private final AtomicInteger eventCount;
     private volatile boolean isConnected = false;
     private final int maxQueueSize;
     private final Lock lock;
+    private final ConcurrentHashMap<String, TagItem> latestTagItemsByEpc = new ConcurrentHashMap<>();
+    private final CopyOnWriteArrayList<Consumer<NotificationEvent>> eventSubscribers = new CopyOnWriteArrayList<>();
 
     public NotificationListener(ReaderModule reader, int maxQueueSize, Lock lock) {
         this.reader = reader;
         this.maxQueueSize = maxQueueSize;
         this.eventQueue = new ConcurrentLinkedQueue<>();
+        this.eventCount = new AtomicInteger(0);
         this.lock = lock;
     }
 
@@ -82,6 +92,10 @@ public class NotificationListener implements IReaderListener, IConnectListener {
                 
                 eventType = reader.async().popEvent(stateRef);
                 state = stateRef.getValue();
+                if (state != ErrorCode.Ok) {
+                    log.error("Error receiving follow-up notification: {}", reader.lastErrorStatusText());
+                    break;
+                }
             }
         } finally {
             lock.unlock();
@@ -97,6 +111,7 @@ public class NotificationListener implements IReaderListener, IConnectListener {
                 event.timestamp = java.time.LocalDateTime.now().toString();
                 event.eventType = "TAG_EVENT";
                 event.idd = tagEvent.tag().iddToHexString();
+                latestTagItemsByEpc.put(event.idd.toUpperCase(Locale.ROOT), tagEvent.tag());
                 
                 // Extract RSSI values
                 List<NotificationEvent.AntennaRssi> rssiList = new ArrayList<>();
@@ -116,11 +131,22 @@ public class NotificationListener implements IReaderListener, IConnectListener {
                 }
                 
                 addEvent(event);
-                log.debug("Tag event: {} (RSSI values: {})", event.idd, rssiList.size());
+                log.debug("Tag event: {} (RSSI values: {})", event.idd, 
+                    rssiList.stream()
+                        .map(r -> String.format("Ant%d:%ddBm", r.antenna, r.rssi))
+                        .reduce((a, b) -> a + ", " + b)
+                        .orElse("none"));
             }
             
             tagEvent = reader.tagEvent().popItem();
         }
+    }
+
+    public TagItem getLatestTagItemByEpc(String epcHex) {
+        if (epcHex == null || epcHex.isBlank()) {
+            return null;
+        }
+        return latestTagItemsByEpc.get(epcHex.toUpperCase(Locale.ROOT));
     }
 
     private void processIdentificationEvent() {
@@ -128,23 +154,45 @@ public class NotificationListener implements IReaderListener, IConnectListener {
             NotificationEvent event = new NotificationEvent();
             event.timestamp = java.time.LocalDateTime.now().toString();
             event.eventType = "IDENTIFICATION_EVENT";
-            event.readerType = reader.identification().readerTypeToString();
-            event.firmwareVersion = reader.identification().versionToString();
             
             addEvent(event);
-            log.debug("Identification event: {}", event.readerType);
+            log.debug("Identification event received");
         }
     }
 
     private void addEvent(NotificationEvent event) {
         eventQueue.offer(event);
-        
-        // Keep queue size limited
-        while (eventQueue.size() > maxQueueSize) {
+        int currentSize = eventCount.incrementAndGet();
+
+        // Keep queue size limited without O(n) queue size scans
+        while (currentSize > maxQueueSize) {
             NotificationEvent dropped = eventQueue.poll();
             if (dropped != null) {
+                currentSize = eventCount.decrementAndGet();
                 log.warn("Event queue full, dropped event: {}", dropped.eventType);
+            } else {
+                break;
             }
+        }
+
+        for (Consumer<NotificationEvent> subscriber : eventSubscribers) {
+            try {
+                subscriber.accept(event);
+            } catch (Exception e) {
+                log.debug("Notification event subscriber failed: {}", e.getMessage());
+            }
+        }
+    }
+
+    public void addEventSubscriber(Consumer<NotificationEvent> subscriber) {
+        if (subscriber != null) {
+            eventSubscribers.add(subscriber);
+        }
+    }
+
+    public void removeEventSubscriber(Consumer<NotificationEvent> subscriber) {
+        if (subscriber != null) {
+            eventSubscribers.remove(subscriber);
         }
     }
 
@@ -157,12 +205,14 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         NotificationEvent event;
         while ((event = eventQueue.poll()) != null) {
             events.add(event);
+            eventCount.decrementAndGet();
         }
         return events;
     }
 
     public void clearEvents() {
         eventQueue.clear();
+        eventCount.set(0);
     }
 
     public boolean isConnected() {
@@ -170,7 +220,7 @@ public class NotificationListener implements IReaderListener, IConnectListener {
     }
 
     public int getEventCount() {
-        return eventQueue.size();
+        return eventCount.get();
     }
 
     public static class NotificationEvent {
@@ -179,8 +229,6 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         public String idd;
         public List<AntennaRssi> rssiValues;
         public String readerTimestamp;
-        public String readerType;
-        public String firmwareVersion;
 
         public static class AntennaRssi {
             public int antenna;

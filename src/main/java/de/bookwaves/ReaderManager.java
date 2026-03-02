@@ -99,7 +99,7 @@ public class ReaderManager {
                     lastConnectionStatus = "error";
                     lastConnectionError = readerModule.lastErrorStatusText();
                     throw new Exception("Failed to connect to reader " + config.getName() + ": " + 
-                                      readerModule.lastErrorStatusText() + " (code: " + returnCode + ")");
+                                      readerModule.lastErrorStatusText() + " (code: " + returnCode + ")");                                    
                 }
                 log.info("Connected to reader {}", config.getName());
                 lastConnectionStatus = "connected";
@@ -275,10 +275,9 @@ public class ReaderManager {
 
             try {
                 lock.lock();
-                
-                if (readerModule == null) {
-                    getModule(); // Ensure reader is initialized and connected
-                }
+
+                // Ensure reader is initialized and currently connected
+                getModule();
 
                 notificationListener = new NotificationListener(readerModule, 1000, lock);
                 

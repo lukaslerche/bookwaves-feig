@@ -1,5 +1,6 @@
 package de.bookwaves;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import de.bookwaves.tag.DE290FTag;
 import de.bookwaves.tag.DE290Tag;
 import de.bookwaves.tag.BookWavesTag;
@@ -21,8 +22,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public class Main {
 
@@ -32,6 +36,7 @@ public class Main {
     // Shared operation pacing and retry configuration for RF operations
     private static final int MAX_RETRIES = 10;
     private static final int OPERATION_SETTLE_MS = 60; // 10 might be enough analyze, but maybe writes need more?
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public static void main(String[] args) {
         List<ReaderConfig> readers;
@@ -143,6 +148,14 @@ public class Main {
                         return;
                     }
 
+                    if (!isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for host mode; notification endpoints are not allowed"
+                        ));
+                        return;
+                    }
+
                     if (managedReader.isNotificationModeActive()) {
                         ctx.status(400).json(Map.of(
                             "success", false,
@@ -192,6 +205,14 @@ public class Main {
                         return;
                     }
 
+                    if (!isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for host mode; notification endpoints are not allowed"
+                        ));
+                        return;
+                    }
+
                     if (!managedReader.isNotificationModeActive()) {
                         ctx.status(404).json(Map.of(
                             "success", false,
@@ -230,7 +251,23 @@ public class Main {
                     ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
                     log.debug("Polling notification events for {}", readerName);
                     
-                    if (managedReader == null || !managedReader.isNotificationModeActive()) {
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    if (!isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for host mode; notification endpoints are not allowed"
+                        ));
+                        return;
+                    }
+
+                    if (!managedReader.isNotificationModeActive()) {
                         ctx.status(404).json(Map.of(
                             "success", false,
                             "error", "No active notification session for reader: " + readerName
@@ -251,6 +288,80 @@ public class Main {
                         "isConnected", listener.isConnected(),
                         "events", events
                     ));
+                });
+
+                config.routes.sse("/notification/stream/{readerName}", client -> {
+                    String readerName = client.ctx().pathParam("readerName");
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+                    log.info("SSE subscription requested for notification reader {}", readerName);
+
+                    if (managedReader == null) {
+                        client.sendEvent("error", toJsonString(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + readerName
+                        )));
+                        client.close();
+                        return;
+                    }
+
+                    if (!isNotificationReader(managedReader.getConfig())) {
+                        client.sendEvent("error", toJsonString(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for host mode; notification endpoints are not allowed"
+                        )));
+                        client.close();
+                        return;
+                    }
+
+                    if (!managedReader.isNotificationModeActive()) {
+                        client.sendEvent("error", toJsonString(Map.of(
+                            "success", false,
+                            "error", "Notification mode is not active for reader: " + readerName
+                        )));
+                        client.close();
+                        return;
+                    }
+
+                    NotificationListener listener = managedReader.getNotificationListener();
+                    if (listener == null) {
+                        client.sendEvent("error", toJsonString(Map.of(
+                            "success", false,
+                            "error", "Notification listener is not available for reader: " + readerName
+                        )));
+                        client.close();
+                        return;
+                    }
+
+                    client.keepAlive();
+
+                    Consumer<NotificationListener.NotificationEvent> subscriber = event -> {
+                        if (client.terminated()) {
+                            return;
+                        }
+                        client.sendEvent(toSseEventName(event), toJsonString(toSsePayload(readerName, event)));
+                    };
+
+                    listener.addEventSubscriber(subscriber);
+                    client.onClose(() -> {
+                        listener.removeEventSubscriber(subscriber);
+                        log.info("SSE subscription closed for {}", readerName);
+                    });
+
+                    client.sendEvent("connected", toJsonString(Map.of(
+                        "success", true,
+                        "readerName", readerName,
+                        "message", "SSE stream connected"
+                    )));
+                });
+
+                config.routes.post("/notification/secure/{readerName}", ctx -> {
+                    log.info("Notification secure requested for {}", ctx.pathParam("readerName"));
+                    handleNotificationSecurityOperation(ctx, readerManager, true);
+                });
+
+                config.routes.post("/notification/unsecure/{readerName}", ctx -> {
+                    log.info("Notification unsecure requested for {}", ctx.pathParam("readerName"));
+                    handleNotificationSecurityOperation(ctx, readerManager, false);
                 });
 
                 config.routes.get("/notification/status", ctx -> {
@@ -324,6 +435,11 @@ public class Main {
                     ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
                     if (managedReader == null) {
                         ctx.status(404).result("Reader not found");
+                        return;
+                    }
+
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).result("Reader is configured for notification mode; use /notification/... endpoints");
                         return;
                     }
 
@@ -428,6 +544,12 @@ public class Main {
                         return;
                     }
 
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(new InventoryResponse(false,
+                            "Reader is configured for notification mode; inventory endpoint is not allowed", 0, null));
+                        return;
+                    }
+
                     try {
                         long inventoryStartNanos = System.nanoTime();
 
@@ -498,11 +620,41 @@ public class Main {
 
                 config.routes.post("/secure/{readerName}", ctx -> {
                     log.info("Secure requested for {}", ctx.pathParam("readerName"));
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(ctx.pathParam("readerName"));
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + ctx.pathParam("readerName")
+                        ));
+                        return;
+                    }
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for notification mode; use /notification/secure/{readerName}"
+                        ));
+                        return;
+                    }
                     handleSecurityOperationWithReconnect(ctx, readerManager, true);
                 });
 
                 config.routes.post("/unsecure/{readerName}", ctx -> {
                     log.info("Unsecure requested for {}", ctx.pathParam("readerName"));
+                    ReaderManager.ManagedReader managedReader = readerManager.getReader(ctx.pathParam("readerName"));
+                    if (managedReader == null) {
+                        ctx.status(404).json(Map.of(
+                            "success", false,
+                            "error", "Reader not found: " + ctx.pathParam("readerName")
+                        ));
+                        return;
+                    }
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for notification mode; use /notification/unsecure/{readerName}"
+                        ));
+                        return;
+                    }
                     handleSecurityOperationWithReconnect(ctx, readerManager, false);
                 });
 
@@ -536,6 +688,14 @@ public class Main {
                         ctx.status(404).json(Map.of(
                             "success", false,
                             "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for notification mode; use /notification/... endpoints"
                         ));
                         return;
                     }
@@ -614,6 +774,14 @@ public class Main {
                         return;
                     }
 
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for notification mode; use /notification/... endpoints"
+                        ));
+                        return;
+                    }
+
                     log.info("Edit requested for reader {} with EPC {} -> mediaId {}", readerName, epcHex, newMediaId);
 
                     try {
@@ -682,6 +850,14 @@ public class Main {
                         return;
                     }
 
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for notification mode; use /notification/... endpoints"
+                        ));
+                        return;
+                    }
+
                     log.info("Clear requested for reader {} and EPC {}", readerName, epcHex);
 
                     try {
@@ -729,6 +905,14 @@ public class Main {
                         ctx.status(404).json(Map.of(
                             "success", false,
                             "error", "Reader not found: " + readerName
+                        ));
+                        return;
+                    }
+
+                    if (isNotificationReader(managedReader.getConfig())) {
+                        ctx.status(400).json(Map.of(
+                            "success", false,
+                            "error", "Reader is configured for notification mode; use /notification/... endpoints"
                         ));
                         return;
                     }
@@ -849,6 +1033,157 @@ public class Main {
                 "success", false,
                 "error", e.getMessage()
             ));
+        }
+    }
+
+    private static void handleNotificationSecurityOperation(io.javalin.http.Context ctx, ReaderManager readerManager, boolean secure) {
+        String readerName = ctx.pathParam("readerName");
+        String epcHex = ctx.queryParam("epc");
+
+        if (epcHex == null || epcHex.isEmpty()) {
+            ctx.status(400).json(Map.of(
+                "success", false,
+                "error", "Missing 'epc' query parameter"
+            ));
+            return;
+        }
+
+        ReaderManager.ManagedReader managedReader = readerManager.getReader(readerName);
+        if (managedReader == null) {
+            ctx.status(404).json(Map.of(
+                "success", false,
+                "error", "Reader not found: " + readerName
+            ));
+            return;
+        }
+
+        if (!isNotificationReader(managedReader.getConfig())) {
+            ctx.status(400).json(Map.of(
+                "success", false,
+                "error", "Reader is configured for host mode; use /secure or /unsecure endpoints"
+            ));
+            return;
+        }
+
+        if (!managedReader.isNotificationModeActive()) {
+            ctx.status(409).json(Map.of(
+                "success", false,
+                "error", "Notification mode is not active for reader: " + readerName
+            ));
+            return;
+        }
+
+        try {
+            Tag tag = TagFactory.createTagFromHexString(epcHex);
+            if (tag instanceof RawTag) {
+                ctx.status(400).json(Map.of(
+                    "success", false,
+                    "error", "Tag format not recognized - cannot modify security on raw tags"
+                ));
+                return;
+            }
+
+            tag.setSecured(secure);
+            String normalizedEpc = epcHex.toUpperCase(Locale.ROOT);
+
+            managedReader.executeWithReconnect(reader -> {
+                NotificationListener listener = managedReader.getNotificationListener();
+                if (listener == null) {
+                    throw new Exception("Notification listener is not available");
+                }
+
+                int rfOffRc = reader.rf().off();
+                if (rfOffRc != ErrorCode.Ok) {
+                    throw new Exception("Failed to pause notification mode (RF off): " + reader.lastErrorStatusText() +
+                        " (code: " + rfOffRc + ")");
+                }
+
+                try {
+                    TagItem tagItem = listener.getLatestTagItemByEpc(normalizedEpc);
+                    if (tagItem == null || !tagItem.isValid()) {
+                        throw new Exception("No notification event TagItem available for EPC " + normalizedEpc +
+                            " - wait for a notification event for this EPC and retry");
+                    }
+                    modifySecurityBitWithoutInventory(reader, normalizedEpc, tag, tagItem);
+                } finally {
+                    int antenna = firstConfiguredAntenna(managedReader.getConfig());
+                    //System.out.println(antenna);
+                    //Thread.sleep(2000); // Small delay to ensure tag is ready before resuming notifications
+                    int rfOnRc = reader.rf().on(antenna, false, false);
+                    if (rfOnRc != ErrorCode.Ok) {
+                        log.error("Failed to resume notification mode for {} after security update (RF on rc={} status={})",
+                            readerName, rfOnRc, reader.lastErrorStatusText());
+                    }
+                }
+
+                return null;
+            });
+
+            ctx.json(Map.of(
+                "success", true,
+                "message", "Tag " + (secure ? "secured" : "unsecured") + " successfully in notification mode",
+                "epc", normalizedEpc,
+                "tagType", tag.getTagType(),
+                "secured", secure
+            ));
+        } catch (ReaderManager.ReaderOperationException e) {
+            log.error("Failed to modify notification-mode security for {}", readerName, e);
+            ctx.status(500).json(Map.of(
+                "success", false,
+                "error", e.getMessage()
+            ));
+        } catch (IllegalArgumentException e) {
+            ctx.status(400).json(Map.of(
+                "success", false,
+                "error", e.getMessage()
+            ));
+        }
+    }
+
+    private static boolean isNotificationReader(ReaderConfig config) {
+        return config != null
+            && config.getMode() != null
+            && config.getMode().trim().equalsIgnoreCase("notification");
+    }
+
+    private static int firstConfiguredAntenna(ReaderConfig config) {
+        if (config != null && config.getAntennas() != null && !config.getAntennas().isEmpty()) {
+            Integer antenna = config.getAntennas().get(0);
+            if (antenna != null && antenna > 0) {
+                return antenna;
+            }
+        }
+        return 1;
+    }
+
+    private static String toSseEventName(NotificationListener.NotificationEvent event) {
+        if (event == null || event.eventType == null) {
+            return "notification";
+        }
+        return switch (event.eventType) {
+            case "TAG_EVENT" -> "tag";
+            case "IDENTIFICATION_EVENT" -> "identification";
+            default -> "notification";
+        };
+    }
+
+    private static Map<String, Object> toSsePayload(String readerName, NotificationListener.NotificationEvent event) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("readerName", readerName);
+        payload.put("timestamp", event.timestamp);
+        payload.put("eventType", event.eventType);
+        payload.put("idd", event.idd);
+        payload.put("rssiValues", event.rssiValues);
+        payload.put("readerTimestamp", event.readerTimestamp);
+        return payload;
+    }
+
+    private static String toJsonString(Object value) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("Failed to serialize SSE payload: {}", e.getMessage());
+            return "{}";
         }
     }
 
@@ -1699,6 +2034,44 @@ public class Main {
             if (returnCode != ErrorCode.Ok) {
                 throw new Exception("Failed to write security bit: " + reader.lastErrorStatusText() +
                                   " (ISO error: " + epcTag.lastIsoError() + ")");
+            }
+        }
+
+        return null;
+    }
+
+    private static Void modifySecurityBitWithoutInventory(ReaderModule reader, String epcHex, Tag tag, TagItem tagItem) throws Exception {
+        byte[] dynamicBlocks = tag.getDynamicBlocks();
+        int startBlock = tag.getDynamicBlocksInitialNumber();
+
+        try (ThBase handler = reader.hm().createTagHandler(tagItem)) {
+            if (!(handler instanceof ThEpcClass1Gen2 epcTag)) {
+                throw new Exception("Specified tag is not EPC Gen2 compatible");
+            }
+
+            DataBuffer dataToWrite = new DataBuffer(dynamicBlocks);
+            byte[] accessPwd = tag.getAccessPassword();
+            boolean hasPassword = false;
+            for (byte b : accessPwd) {
+                if (b != 0) {
+                    hasPassword = true;
+                    break;
+                }
+            }
+
+            DataBuffer accessPwdData = hasPassword ? new DataBuffer(accessPwd) : null;
+            int returnCode = writeWithRetry(
+                epcTag,
+                ThEpcClass1Gen2.Bank.Epc,
+                startBlock,
+                dynamicBlocks.length / 2,
+                dataToWrite,
+                accessPwdData
+            );
+
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to write security bit for " + epcHex + ": " + reader.lastErrorStatusText() +
+                    " (ISO error: " + epcTag.lastIsoError() + ")");
             }
         }
 
