@@ -1271,13 +1271,14 @@ public class Main {
             throw new Exception("No tags found in field");
         }
 
-        // Find matching tag
+        // Find matching tag once for validation/logging
         log.debug("Searching inventory for EPC {}", epcHex);
-        try (ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex)) {
-            if (epcTag == null) {
+        try (ThEpcClass1Gen2 initialTag = findTagByEpc(reader, epcHex)) {
+            if (initialTag == null) {
                 throw new Exception("Specified tag not found or not EPC Gen2");
             }
-            log.debug("Tag handler acquired for EPC {} (transponder={})", epcHex, epcTag.transponderName());
+            log.debug("Tag handler acquired for EPC {} (transponder={})", epcHex, initialTag.transponderName());
+        }
 
         // Prepare response structure
         Map<String, Object> analysis = new java.util.LinkedHashMap<>();
@@ -1285,21 +1286,24 @@ public class Main {
         analysis.put("mediaId", theoreticalTag.getMediaId());
         
         // First, read just the PC to determine EPC length
-        DataBuffer pcData = new DataBuffer();
         long pcReadStartNanos = System.nanoTime();
         log.debug("Step PC_READ: reading EPC bank word 1 (PC) for {}", epcHex);
-        returnCode = epcTag.readMultipleBlocks(
+        ReadResult pcRead = readByEpcWithRetry(
+            reader,
+            config,
+            epcHex,
             ThEpcClass1Gen2.Bank.Epc,
             1, // PC is at word 1
-            1, // Read 1 word (2 bytes)
-            pcData
+            1 // Read 1 word (2 bytes)
         );
+        returnCode = pcRead.returnCode();
+        DataBuffer pcData = pcRead.data();
         long pcReadDurationMs = (System.nanoTime() - pcReadStartNanos) / 1_000_000;
         log.debug("Step PC_READ done for {} in {} ms (rc={} isoError={} bytes={})",
             epcHex,
             pcReadDurationMs,
             returnCode,
-            epcTag.lastIsoError(),
+            pcRead.lastIsoError(),
             pcData.data() == null ? 0 : pcData.data().length);
         
         if (returnCode != ErrorCode.Ok) {
@@ -1326,24 +1330,27 @@ public class Main {
         
         // Now read PC + EPC together based on actual length
         pauseBetweenOperations("ANALYZE_PC_READ -> ANALYZE_EPC_READ", epcHex);
-        DataBuffer epcBankData = new DataBuffer();
         long epcReadStartNanos = System.nanoTime();
         log.debug("Step EPC_READ: reading EPC bank words {}..{} for {}",
             1,
             1 + epcLengthInWords,
             epcHex);
-        returnCode = epcTag.readMultipleBlocks(
+        ReadResult epcRead = readByEpcWithRetry(
+            reader,
+            config,
+            epcHex,
             ThEpcClass1Gen2.Bank.Epc,
             1, // Start at word 1 (PC)
-            1 + epcLengthInWords, // PC (1 word) + EPC (variable words)
-            epcBankData
+            1 + epcLengthInWords // PC (1 word) + EPC (variable words)
         );
+        returnCode = epcRead.returnCode();
+        DataBuffer epcBankData = epcRead.data();
         long epcReadDurationMs = (System.nanoTime() - epcReadStartNanos) / 1_000_000;
         log.debug("Step EPC_READ done for {} in {} ms (rc={} isoError={} bytes={})",
             epcHex,
             epcReadDurationMs,
             returnCode,
-            epcTag.lastIsoError(),
+            epcRead.lastIsoError(),
             epcBankData.data() == null ? 0 : epcBankData.data().length);
         
         byte[] actualPcEpc = (returnCode == ErrorCode.Ok) ? epcBankData.data() : new byte[0];
@@ -1373,21 +1380,24 @@ public class Main {
         
         // Read TID bank (96 bits = 6 words)
         pauseBetweenOperations("ANALYZE_EPC_READ -> ANALYZE_TID_READ", epcHex);
-        DataBuffer tidData = new DataBuffer();
         long tidReadStartNanos = System.nanoTime();
         log.debug("Step TID_READ: reading TID bank words 0..5 for {}", epcHex);
-        returnCode = epcTag.readMultipleBlocks(
+        ReadResult tidRead = readByEpcWithRetry(
+            reader,
+            config,
+            epcHex,
             ThEpcClass1Gen2.Bank.Tid,
             0,
-            6,
-            tidData
+            6
         );
+        returnCode = tidRead.returnCode();
+        DataBuffer tidData = tidRead.data();
         long tidReadDurationMs = (System.nanoTime() - tidReadStartNanos) / 1_000_000;
         log.debug("Step TID_READ done for {} in {} ms (rc={} isoError={} bytes={})",
             epcHex,
             tidReadDurationMs,
             returnCode,
-            epcTag.lastIsoError(),
+            tidRead.lastIsoError(),
             tidData.data() == null ? 0 : tidData.data().length);
         
         Map<String, Object> tidBank = new java.util.LinkedHashMap<>();
@@ -1408,34 +1418,38 @@ public class Main {
         // Analyze Reserved bank and passwords
             pauseBetweenOperations("ANALYZE_TID_READ -> ANALYZE_RESERVED_ANALYZE", epcHex);
             log.debug("Step RESERVED_ANALYZE: starting reserved bank analysis for {}", epcHex);
-            analyzeReservedBank(epcTag, theoreticalTag, analysis);
+            analyzeReservedBank(reader, config, epcHex, theoreticalTag, analysis);
             log.debug("Step RESERVED_ANALYZE: completed reserved bank analysis for {}", epcHex);
 
             long totalDurationMs = (System.nanoTime() - analyzeStartNanos) / 1_000_000;
             log.debug("Analyze sequence finished for {} in {} ms", epcHex, totalDurationMs);
 
             return analysis;
-        }
     }
 
     /**
      * Analyze Reserved bank for password security.
      */
-    private static void analyzeReservedBank(ThEpcClass1Gen2 epcTag, Tag theoreticalTag, Map<String, Object> analysis) throws Exception {
+    private static void analyzeReservedBank(ReaderModule reader, ReaderConfig config, String epcHex, Tag theoreticalTag, Map<String, Object> analysis) throws Exception {
         // Attempt to read Reserved bank WITHOUT password (to check lock status)
-        DataBuffer reservedDataNoAuth = new DataBuffer();
         long readNoAuthStartNanos = System.nanoTime();
-        int returnCode = epcTag.readMultipleBlocks(
+        ReadResult reservedReadNoAuth = readByEpcWithRetry(
+            reader,
+            config,
+            epcHex,
             ThEpcClass1Gen2.Bank.Reserved,
             0, // Kill password at word 0
             4, // Read all 4 words (kill + access passwords)
-            reservedDataNoAuth
+            null,
+            1
         );
+        int returnCode = reservedReadNoAuth.returnCode();
+        DataBuffer reservedDataNoAuth = reservedReadNoAuth.data();
         long readNoAuthDurationMs = (System.nanoTime() - readNoAuthStartNanos) / 1_000_000;
         log.debug("Reserved read without auth done in {} ms (rc={} isoError={} bytes={})",
             readNoAuthDurationMs,
             returnCode,
-            epcTag.lastIsoError(),
+            reservedReadNoAuth.lastIsoError(),
             reservedDataNoAuth.data() == null ? 0 : reservedDataNoAuth.data().length);
         
         boolean reservedReadableWithoutAuth = (returnCode == ErrorCode.Ok);
@@ -1443,21 +1457,24 @@ public class Main {
         // Attempt to read Reserved bank WITH password
         byte[] accessPwd = theoreticalTag.getAccessPassword();
         DataBuffer accessPwdBuf = new DataBuffer(accessPwd);
-        DataBuffer reservedDataWithAuth = new DataBuffer();
         pauseBetweenOperations("ANALYZE_RESERVED_NOAUTH_READ -> ANALYZE_RESERVED_AUTH_READ", theoreticalTag.getEpcHexString());
         long readWithAuthStartNanos = System.nanoTime();
-        returnCode = epcTag.readMultipleBlocks(
+        ReadResult reservedReadWithAuth = readByEpcWithRetry(
+            reader,
+            config,
+            epcHex,
             ThEpcClass1Gen2.Bank.Reserved,
             0,
             4,
-            reservedDataWithAuth,
             accessPwdBuf
         );
+        returnCode = reservedReadWithAuth.returnCode();
+        DataBuffer reservedDataWithAuth = reservedReadWithAuth.data();
         long readWithAuthDurationMs = (System.nanoTime() - readWithAuthStartNanos) / 1_000_000;
         log.debug("Reserved read with auth done in {} ms (rc={} isoError={} bytes={})",
             readWithAuthDurationMs,
             returnCode,
-            epcTag.lastIsoError(),
+            reservedReadWithAuth.lastIsoError(),
             reservedDataWithAuth.data() == null ? 0 : reservedDataWithAuth.data().length);
         
         boolean reservedReadableWithAuth = (returnCode == ErrorCode.Ok);
@@ -1730,6 +1747,91 @@ public class Main {
             hex.append(String.format("%02X", b));
         }
         return hex.toString();
+    }
+
+    private record ReadResult(int returnCode, DataBuffer data, int lastIsoError) {}
+
+    private static ReadResult readByEpcWithRetry(ReaderModule reader, ReaderConfig config, String epcHex,
+                                                 ThEpcClass1Gen2.Bank bank, int startBlock, int blockCount) {
+        return readByEpcWithRetry(reader, config, epcHex, bank, startBlock, blockCount, null);
+    }
+
+    private static ReadResult readByEpcWithRetry(ReaderModule reader, ReaderConfig config, String epcHex,
+                                                 ThEpcClass1Gen2.Bank bank, int startBlock, int blockCount,
+                                                 DataBuffer password) {
+        return readByEpcWithRetry(reader, config, epcHex, bank, startBlock, blockCount, password, MAX_RETRIES);
+    }
+
+    private static ReadResult readByEpcWithRetry(ReaderModule reader, ReaderConfig config, String epcHex,
+                                                 ThEpcClass1Gen2.Bank bank, int startBlock, int blockCount,
+                                                 DataBuffer password, int maxAttempts) {
+        int lastReturnCode = -1;
+        int lastIsoError = 0;
+        DataBuffer lastData = new DataBuffer();
+
+        int attempts = Math.max(1, maxAttempts);
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                InventoryParam inventoryParam = new InventoryParam();
+                inventoryParam.setAntennas(config.getAntennaMask());
+                int inventoryRc = reader.hm().inventory(true, inventoryParam);
+
+                if (inventoryRc != ErrorCode.Ok) {
+                    lastReturnCode = inventoryRc;
+                    log.warn("Read {}[{}] inventory failed on attempt {}/{} (error: {} status: {})",
+                        bank, startBlock, attempt, attempts, inventoryRc, reader.lastErrorStatusText());
+                } else if (reader.hm().itemCount() == 0) {
+                    lastReturnCode = -1;
+                    log.warn("Read {}[{}] found no tags on attempt {}/{} for EPC {}",
+                        bank, startBlock, attempt, attempts, epcHex);
+                } else {
+                    try (ThEpcClass1Gen2 epcTag = findTagByEpc(reader, epcHex)) {
+                        if (epcTag == null) {
+                            lastReturnCode = -1;
+                            log.warn("Read {}[{}] could not re-select EPC {} on attempt {}/{}",
+                                bank, startBlock, epcHex, attempt, attempts);
+                        } else {
+                            DataBuffer attemptData = new DataBuffer();
+                            int returnCode = (password != null)
+                                ? epcTag.readMultipleBlocks(bank, startBlock, blockCount, attemptData, password)
+                                : epcTag.readMultipleBlocks(bank, startBlock, blockCount, attemptData);
+
+                            lastReturnCode = returnCode;
+                            lastIsoError = epcTag.lastIsoError();
+                            lastData = attemptData;
+
+                            if (returnCode == ErrorCode.Ok) {
+                                if (attempt > 1) {
+                                    log.info("Read {}[{}] for EPC {} succeeded on attempt {}/{}",
+                                        bank, startBlock, epcHex, attempt, attempts);
+                                }
+                                return new ReadResult(returnCode, attemptData, lastIsoError);
+                            }
+
+                            log.warn("Read {}[{}] for EPC {} failed on attempt {}/{} (error: {} status: {} iso: {})",
+                                bank, startBlock, epcHex, attempt, attempts,
+                                returnCode, reader.lastErrorStatusText(), lastIsoError);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                lastReturnCode = -1;
+                log.warn("Read {}[{}] attempt {}/{} failed with exception for EPC {}: {}",
+                    bank, startBlock, attempt, attempts, epcHex, e.getMessage());
+            }
+
+            if (attempt < attempts) {
+                try {
+                    Thread.sleep(OPERATION_SETTLE_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Read retry interrupted for EPC {}", epcHex);
+                    break;
+                }
+            }
+        }
+
+        return new ReadResult(lastReturnCode, lastData, lastIsoError);
     }
 
     /**
