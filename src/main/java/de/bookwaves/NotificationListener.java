@@ -14,8 +14,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -34,13 +36,23 @@ public class NotificationListener implements IReaderListener, IConnectListener {
     private final Lock lock;
     private final ConcurrentHashMap<String, TagItem> latestTagItemsByEpc = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<Consumer<NotificationEvent>> eventSubscribers = new CopyOnWriteArrayList<>();
+    private final Set<Integer> allowedAntennas;
 
-    public NotificationListener(ReaderModule reader, int maxQueueSize, Lock lock) {
+    public NotificationListener(ReaderModule reader, int maxQueueSize, Lock lock, List<Integer> configuredAntennas) {
         this.reader = reader;
         this.maxQueueSize = maxQueueSize;
         this.eventQueue = new ConcurrentLinkedQueue<>();
         this.eventCount = new AtomicInteger(0);
         this.lock = lock;
+        this.allowedAntennas = new HashSet<>();
+        if (configuredAntennas != null) {
+            for (Integer antenna : configuredAntennas) {
+                if (antenna != null && antenna > 0) {
+                    this.allowedAntennas.add(antenna);
+                }
+            }
+        }
+        log.info("Notification antenna filter active: {}", this.allowedAntennas.isEmpty() ? "none" : this.allowedAntennas);
     }
 
     @Override
@@ -110,19 +122,29 @@ public class NotificationListener implements IReaderListener, IConnectListener {
                 NotificationEvent event = new NotificationEvent();
                 event.timestamp = java.time.LocalDateTime.now().toString();
                 event.eventType = "TAG_EVENT";
-                event.idd = tagEvent.tag().iddToHexString();
-                latestTagItemsByEpc.put(event.idd.toUpperCase(Locale.ROOT), tagEvent.tag());
+                event.epc = tagEvent.tag().iddToHexString();
+                latestTagItemsByEpc.put(event.epc.toUpperCase(Locale.ROOT), tagEvent.tag());
                 
                 // Extract RSSI values
                 List<NotificationEvent.AntennaRssi> rssiList = new ArrayList<>();
                 for (RssiItem rssiItem : tagEvent.tag().rssiValues()) {
                     if (rssiItem.isValid()) {
-                        rssiList.add(new NotificationEvent.AntennaRssi(
-                            rssiItem.antennaNumber(), 
-                            rssiItem.rssi()
-                        ));
+                        int antennaNumber = rssiItem.antennaNumber();
+                        if (allowedAntennas.isEmpty() || allowedAntennas.contains(antennaNumber)) {
+                            rssiList.add(new NotificationEvent.AntennaRssi(
+                                antennaNumber,
+                                rssiItem.rssi()
+                            ));
+                        }
                     }
                 }
+
+                if (!allowedAntennas.isEmpty() && !tagEvent.tag().rssiValues().isEmpty() && rssiList.isEmpty()) {
+                    log.debug("Dropped tag event {} due to non-configured antenna RSSI values", event.epc);
+                    tagEvent = reader.tagEvent().popItem();
+                    continue;
+                }
+
                 event.rssiValues = rssiList;
                 
                 // Extract timestamp if valid
@@ -131,9 +153,9 @@ public class NotificationListener implements IReaderListener, IConnectListener {
                 }
                 
                 addEvent(event);
-                log.debug("Tag event: {} (RSSI values: {})", event.idd, 
+                log.debug("Tag event: {} (RSSI values: {})", event.epc, 
                     rssiList.stream()
-                        .map(r -> String.format("Ant%d:%ddBm", r.antenna, r.rssi))
+                        .map(r -> String.format("Ant%d:%ddBm", r.antennaNumber, r.rssi))
                         .reduce((a, b) -> a + ", " + b)
                         .orElse("none"));
             }
@@ -226,16 +248,16 @@ public class NotificationListener implements IReaderListener, IConnectListener {
     public static class NotificationEvent {
         public String timestamp;
         public String eventType;
-        public String idd;
+        public String epc;
         public List<AntennaRssi> rssiValues;
         public String readerTimestamp;
 
         public static class AntennaRssi {
-            public int antenna;
+            public int antennaNumber;
             public int rssi;
 
-            public AntennaRssi(int antenna, int rssi) {
-                this.antenna = antenna;
+            public AntennaRssi(int antennaNumber, int rssi) {
+                this.antennaNumber = antennaNumber;
                 this.rssi = rssi;
             }
         }

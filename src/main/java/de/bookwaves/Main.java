@@ -1110,12 +1110,17 @@ public class Main {
                 if (listener == null) {
                     throw new Exception("Notification listener is not available");
                 }
+ 
+                int antenna = firstConfiguredAntenna(managedReader.getConfig());
+                log.debug("Notification security op for {}: pause RF (epc={} secure={} configuredAntennas={} resumeAntenna={})",
+                    readerName, normalizedEpc, secure, managedReader.getConfig().getAntennas(), antenna);
 
                 int rfOffRc = reader.rf().off();
                 if (rfOffRc != ErrorCode.Ok) {
                     throw new Exception("Failed to pause notification mode (RF off): " + reader.lastErrorStatusText() +
                         " (code: " + rfOffRc + ")");
                 }
+                log.debug("RF off successful for {}", readerName);
 
                 try {
                     TagItem tagItem = listener.getLatestTagItemByEpc(normalizedEpc);
@@ -1125,13 +1130,14 @@ public class Main {
                     }
                     modifySecurityBitWithoutInventory(reader, normalizedEpc, tag, tagItem);
                 } finally {
-                    int antenna = firstConfiguredAntenna(managedReader.getConfig());
                     //System.out.println(antenna);
                     //Thread.sleep(2000); // Small delay to ensure tag is ready before resuming notifications
                     int rfOnRc = reader.rf().on(antenna, false, false);
                     if (rfOnRc != ErrorCode.Ok) {
                         log.error("Failed to resume notification mode for {} after security update (RF on rc={} status={})",
                             readerName, rfOnRc, reader.lastErrorStatusText());
+                    } else {
+                        log.debug("RF on successful for {} (antenna={})", readerName, antenna);
                     }
                 }
 
@@ -1191,7 +1197,7 @@ public class Main {
         payload.put("readerName", readerName);
         payload.put("timestamp", event.timestamp);
         payload.put("eventType", event.eventType);
-        payload.put("idd", event.idd);
+        payload.put("epc", event.epc);
         payload.put("rssiValues", event.rssiValues);
         payload.put("readerTimestamp", event.readerTimestamp);
         return payload;

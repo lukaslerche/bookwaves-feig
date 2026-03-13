@@ -279,7 +279,7 @@ public class ReaderManager {
                 // Ensure reader is initialized and currently connected
                 getModule();
 
-                notificationListener = new NotificationListener(readerModule, 1000, lock);
+                notificationListener = new NotificationListener(readerModule, 1000, lock, config.getAntennas());
                 
                 int state = readerModule.async().startNotification(notificationListener);
                 if (state != ErrorCode.Ok) {
