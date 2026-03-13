@@ -284,6 +284,7 @@ public class ReaderManager {
                 int state = readerModule.async().startNotification(notificationListener);
                 if (state != ErrorCode.Ok) {
                     log.error("Failed to start notification: {}", readerModule.lastErrorStatusText());
+                    notificationListener.close();
                     notificationListener = null;
                     return false;
                 }
@@ -297,6 +298,7 @@ public class ReaderManager {
                 if (state != ErrorCode.Ok) {
                     log.error("Failed to start listener thread: {}", readerModule.lastErrorStatusText());
                     readerModule.async().stopNotification();
+                    notificationListener.close();
                     notificationListener = null;
                     return false;
                 }
@@ -329,6 +331,8 @@ public class ReaderManager {
                         log.warn("Failed to stop notification: {}", readerModule.lastErrorStatusText());
                     }
                 }
+
+                notificationListener.close();
 
                 notificationListener = null;
                 listenerPort = -1;

@@ -1187,6 +1187,9 @@ public class Main {
         }
         return switch (event.eventType) {
             case "TAG_EVENT" -> "tag";
+            case "TAG_REMOVED" -> "tag_removed";
+            case "TAG_STABLE" -> "tag_stable";
+            case "TAG_UNSTABLE" -> "tag_unstable";
             case "IDENTIFICATION_EVENT" -> "identification";
             default -> "notification";
         };
@@ -1198,8 +1201,16 @@ public class Main {
         payload.put("timestamp", event.timestamp);
         payload.put("eventType", event.eventType);
         payload.put("epc", event.epc);
+        payload.put("tagType", event.tagType);
+        payload.put("mediaId", event.mediaId);
+        payload.put("secured", event.secured);
+        payload.put("pc", event.pc);
         payload.put("rssiValues", event.rssiValues);
         payload.put("readerTimestamp", event.readerTimestamp);
+        payload.put("stable", event.stable);
+        payload.put("seenCount", event.seenCount);
+        payload.put("presenceDurationMs", event.presenceDurationMs);
+        payload.put("bestRssi", event.bestRssi == Integer.MIN_VALUE ? null : event.bestRssi);
         return payload;
     }
 
