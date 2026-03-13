@@ -35,7 +35,7 @@ public class Main {
     
     // Shared operation pacing and retry configuration for RF operations
     private static final int MAX_RETRIES = 10;
-    private static final int OPERATION_SETTLE_MS = 60; // 10 might be enough analyze, but maybe writes need more?
+    private static final int OPERATION_SETTLE_MS = 15; // 10 might be enough analyze, but maybe writes need more?
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     public static void main(String[] args) {
@@ -487,7 +487,7 @@ public class Main {
                                             log.debug("EPC: {}", epcTag.epcToHexString());
 
                                         }
-                                        Thread.sleep(200); // Small delay to ensure tag is ready for next command
+                                        Thread.sleep(15); // Small delay to ensure tag is ready for next command
                                         // Read blocks
                                         int blocksToRead = 10; // Number of blocks to read
                                         int startBlock = 0; // Starting block address
@@ -500,7 +500,7 @@ public class Main {
                                         log.debug("Read data: {}", data.toHexString(" "));
 
 
-                                        Thread.sleep(200); // Small delay to ensure tag is ready for next command
+                                        /*Thread.sleep(200); // Small delay to ensure tag is ready for next command
                                         // example byte array
                                         byte[] newEpc = new byte[] { (byte)0x11, (byte)0x22, (byte)0x33, (byte)0x44, (byte)0x55, (byte)0x66 };
                                         DataBuffer dataToWrite = new DataBuffer(newEpc);
@@ -509,7 +509,7 @@ public class Main {
                                         log.debug("Write multiple blocks return code: {}", returnCode);
                                         log.debug("Last error state: {}", reader.lastErrorStatusText());
                                         log.debug("Last tag ISO error: {}", tagHandler.lastIsoError());
-                                        log.debug("Write data: {}", dataToWrite.toHexString(" "));
+                                        log.debug("Write data: {}", dataToWrite.toHexString(" "));*/
 
 
                                     } else {
