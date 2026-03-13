@@ -314,12 +314,31 @@ public class Main {
                     }
 
                     if (!managedReader.isNotificationModeActive()) {
-                        client.sendEvent("error", toJsonString(Map.of(
-                            "success", false,
-                            "error", "Notification mode is not active for reader: " + readerName
-                        )));
-                        client.close();
-                        return;
+                        int port = readerManager.allocateListenerPort();
+                        log.info("Notification mode inactive for {} - attempting lazy start on port {}", readerName, port);
+                        try {
+                            boolean started = managedReader.startNotificationMode(port);
+                            if (started) {
+                                log.info("Lazy-started notification mode for {} on port {}", readerName, port);
+                            } else if (managedReader.isNotificationModeActive()) {
+                                log.debug("Notification mode became active for {} while handling SSE subscribe", readerName);
+                            } else {
+                                client.sendEvent("error", toJsonString(Map.of(
+                                    "success", false,
+                                    "error", "Failed to start notification mode for reader: " + readerName
+                                )));
+                                client.close();
+                                return;
+                            }
+                        } catch (Exception e) {
+                            log.error("Failed to lazy-start notification mode for {}", readerName, e);
+                            client.sendEvent("error", toJsonString(Map.of(
+                                "success", false,
+                                "error", e.getMessage()
+                            )));
+                            client.close();
+                            return;
+                        }
                     }
 
                     NotificationListener listener = managedReader.getNotificationListener();
