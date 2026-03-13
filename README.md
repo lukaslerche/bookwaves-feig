@@ -157,6 +157,59 @@ Returns all configured readers with their status and configuration.
 }
 ```
 
+### Notification Mode (SSE)
+
+Use these endpoints for readers configured with `mode: notification`.
+
+#### Start Notification Session
+```http
+POST /notification/start/{readerName}
+```
+
+Starts the FEIG notification listener for the reader.
+
+#### Stop Notification Session
+```http
+POST /notification/stop/{readerName}
+```
+
+Stops the notification listener for the reader.
+
+#### Subscribe to Notification Events (SSE)
+```http
+GET /notification/stream/{readerName}
+```
+
+Server-Sent Events stream. Event names:
+- `connected` - Initial stream handshake
+- `tag` - New tag event (includes `idd`)
+- `identification` - Reader identification event
+- `error` - Stream-level errors
+
+Each `tag` event payload includes:
+- `readerName`
+- `timestamp`
+- `eventType`
+- `idd` (EPC/IDD hex)
+- `rssiValues`
+- `readerTimestamp`
+
+#### Poll Notification Events (Legacy)
+```http
+GET /notification/events/{readerName}
+```
+
+Returns and drains queued notification events as JSON.
+
+#### Notification Security Operations
+```http
+POST /notification/secure/{readerName}?epc={epc}
+POST /notification/unsecure/{readerName}?epc={epc}
+```
+
+Use the `idd` value from SSE `tag` events as the `epc` query value.
+
+
 ### Tag Operations
 
 #### Inventory Scan
