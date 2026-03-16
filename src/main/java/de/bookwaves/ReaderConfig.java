@@ -15,6 +15,7 @@ public class ReaderConfig {
     private String name;
     private String address;
     private int port;
+    private Integer listenerPort;
     private String mode;
     private List<Integer> antennas = new ArrayList<>();
 
@@ -22,10 +23,11 @@ public class ReaderConfig {
         // Default constructor for YAML deserialization
     }
 
-    public ReaderConfig(String name, String address, int port, String mode, List<Integer> antennas) {
+    public ReaderConfig(String name, String address, int port, Integer listenerPort, String mode, List<Integer> antennas) {
         this.name = name;
         this.address = address;
         this.port = port;
+        this.listenerPort = listenerPort;
         this.mode = mode;
         setAntennas(antennas);
     }
@@ -52,6 +54,14 @@ public class ReaderConfig {
 
     public void setPort(int port) {
         this.port = port;
+    }
+
+    public Integer getListenerPort() {
+        return listenerPort;
+    }
+
+    public void setListenerPort(Integer listenerPort) {
+        this.listenerPort = listenerPort;
     }
 
     public String getMode() {

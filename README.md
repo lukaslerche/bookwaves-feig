@@ -35,6 +35,7 @@ cp config.example.yaml config.yaml
 ```bash
 docker run -d \
   -p 7070:7070 \
+  -p 20001-20020:20001-20020 \
   -v $(pwd)/config.yaml:/app/config/config.yaml:ro \
   ghcr.io/lukaslerche/bookwaves-feig:latest
 ```
@@ -65,6 +66,7 @@ See `config.example.yaml` for the complete configuration template.
 
 **Reader configurations:**
 - Name, IP address, port
+- Listener port (`listenerPort`) for reader push notifications to this service
 - Operating mode: `host` or `notification`
 - Antenna numbers (as array)
 
@@ -97,6 +99,7 @@ readers:
   - name: "reader2"
     address: "192.168.1.70"
     port: 10001
+    listenerPort: 20001
     mode: notification
     antennas: [1,2]
 ```
@@ -108,6 +111,8 @@ readers:
 **Important notes:**
 - Only configure passwords for tag formats you actually use
 - Replace placeholder passwords with your actual tag passwords
+- Every notification-mode reader must have a unique `listenerPort`
+- When running in Docker, publish a listener port range that covers all configured listenerPort values (for example `-p 20001-20020:20001-20020`)
 
 ### Configuring the RFID reader with ISOStart or web interface
 To make an RFID reader work in host mode or notification mode, you need to configure it properly using the ISOStart software or the reader's web interface (web interface only on MRU400). The exact steps depend on your reader model and firmware version, but generally include:
@@ -173,7 +178,8 @@ Returns all configured readers with their status and configuration.
       "name": "reader1",
       "address": "192.168.1.225",
       "port": 10001,
-      "mode": "host",
+      "listenerPort": 20001,
+      "mode": "notification",
       "antennas": [1, 2, 3, 4],
       "antennaMask": "0x0F",
       "isConnected": true,

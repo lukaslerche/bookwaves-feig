@@ -165,7 +165,7 @@ public class Main {
                     }
 
                     try {
-                        int port = readerManager.allocateListenerPort();
+                        int port = getRequiredNotificationListenerPort(managedReader.getConfig());
                         boolean started = managedReader.startNotificationMode(port);
                         
                         if (!started) {
@@ -314,7 +314,7 @@ public class Main {
                     }
 
                     if (!managedReader.isNotificationModeActive()) {
-                        int port = readerManager.allocateListenerPort();
+                        int port = getRequiredNotificationListenerPort(managedReader.getConfig());
                         log.info("Notification mode inactive for {} - attempting lazy start on port {}", readerName, port);
                         try {
                             boolean started = managedReader.startNotificationMode(port);
@@ -425,6 +425,7 @@ public class Main {
                         readerInfo.put("name", readerConfig.getName());
                         readerInfo.put("address", readerConfig.getAddress());
                         readerInfo.put("port", readerConfig.getPort());
+                        readerInfo.put("listenerPort", readerConfig.getListenerPort());
                         readerInfo.put("mode", readerConfig.getMode());
                         readerInfo.put("antennas", readerConfig.getAntennas());
                         readerInfo.put("antennaMask", String.format("0x%02X", readerConfig.getAntennaMask()));
@@ -1169,6 +1170,22 @@ public class Main {
         return config != null
             && config.getMode() != null
             && config.getMode().trim().equalsIgnoreCase("notification");
+    }
+
+    private static int getRequiredNotificationListenerPort(ReaderConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("Reader configuration is missing");
+        }
+
+        Integer listenerPort = config.getListenerPort();
+        if (listenerPort == null || listenerPort <= 0 || listenerPort > 65535) {
+            throw new IllegalArgumentException(
+                "Missing or invalid listenerPort for notification reader " + config.getName() +
+                "; expected an integer in range 1-65535"
+            );
+        }
+
+        return listenerPort;
     }
 
     private static int firstConfiguredAntenna(ReaderConfig config) {

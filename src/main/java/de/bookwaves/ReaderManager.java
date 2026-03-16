@@ -19,7 +19,6 @@ import java.util.concurrent.locks.ReentrantLock;
 public class ReaderManager {
     private static final Logger log = LoggerFactory.getLogger(ReaderManager.class);
     private final Map<String, ManagedReader> readers = new HashMap<>();
-    private int nextListenerPort = 20001;
     
     // Reconnection configuration
     private static final int MAX_RECONNECT_ATTEMPTS = 3;
@@ -396,10 +395,6 @@ public class ReaderManager {
 
     public Map<String, ManagedReader> getAllReaders() {
         return readers;
-    }
-
-    public synchronized int allocateListenerPort() {
-        return nextListenerPort++;
     }
 
     public void closeAll() {

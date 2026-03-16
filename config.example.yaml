@@ -40,3 +40,9 @@ readers:
     port: 10001
     mode: host
     antennas: [4]
+  - name: reader2
+    address: 192.168.1.70
+    port: 10001
+    listenerPort: 20001
+    mode: notification
+    antennas: [1,2]

@@ -4,6 +4,7 @@ services:
     container_name: feig
     ports:
       - '7070:7070'
+      - '20001-20020:20001-20020'
     volumes:
       # REQUIRED: Mount your configuration file
       # Copy config.example.yaml to config.yaml and customize before running
