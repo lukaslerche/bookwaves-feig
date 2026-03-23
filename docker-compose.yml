@@ -2,9 +2,10 @@ services:
   feig:
     image: ghcr.io/lukaslerche/bookwaves-feig:latest
     container_name: feig
+    # platform: linux/amd64 # Uncomment when running on Apple Silicon and your Docker complains about architecture
     ports:
       - '7070:7070'
-      - '20001-20020:20001-20020'
+      - '20001-20020:20001-20020' # Port range for the WebSocket servers
     volumes:
       # REQUIRED: Mount your configuration file
       # Copy config.example.yaml to config.yaml and customize before running
