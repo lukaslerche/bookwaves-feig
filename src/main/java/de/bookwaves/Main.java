@@ -745,6 +745,22 @@ public class Main {
                             "tagType", newTag.getTagType()
                         ));
 
+                        // Logging the tagged books
+                        try
+                        {
+                            String filename= "/logs/taggingLog.csv";
+                            FileWriter fileWriter = new FileWriter(filename, true);
+                            String timestamp = new SimpleDateFormat("yyyy.MM.dd HH:mm:ss").format(new Date());
+                            String epc = newTag.getEpcHexString();
+                            String pc = newTag.getPCHexString();
+                            String logEntry = String.format("%s,%s,%s,%s\n", timestamp, readerName, mediaId, epc); 
+                            fileWriter.write(logEntry);
+                            fileWriter.close();
+                        }
+                        catch(IOException ioe) {
+                            System.err.println("IOException: " + ioe.getMessage());
+                        }
+
                     } catch (NumberFormatException e) {
                         ctx.status(400).json(Map.of(
                             "success", false,
