@@ -7,6 +7,7 @@ services:
       - '7070:7070'
       - '20001-20020:20001-20020' # Port range for the WebSocket servers
     volumes:
+      - ./logs/taggingLog.csv:/logs/taggingLog.csv
       # REQUIRED: Mount your configuration file
       # Copy config.example.yaml to config.yaml and customize before running
       - ./config.yaml:/app/config/config.yaml:ro
