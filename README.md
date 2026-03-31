@@ -90,6 +90,10 @@ tagPasswords:
 # Default tag format for initialization
 defaultTagFormat: DE290
 
+# CSV file logging for successful /initialize calls
+tagFileLoggingEnabled: true
+tagFileLoggingPath: /logs/taggingLog.csv
+
 readers:
   - name: "reader1"
     address: "192.168.1.225"
@@ -113,6 +117,7 @@ readers:
 - Replace placeholder passwords with your actual tag passwords
 - Every notification-mode reader must have a unique `listenerPort`
 - When running in Docker, publish a listener port range that covers all configured listenerPort values (for example `-p 20001-20020:20001-20020`)
+- If `tagFileLoggingEnabled` is true, ensure `tagFileLoggingPath` is writable in the runtime (in Docker, mount that path to persist logs)
 
 ### Configuring the RFID reader with ISOStart or web interface
 To make an RFID reader work in host mode or notification mode, you need to configure it properly using the ISOStart software or the reader's web interface (web interface only on MRU400). The exact steps depend on your reader model and firmware version, but generally include:

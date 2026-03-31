@@ -21,6 +21,13 @@ import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,6 +44,9 @@ public class Main {
     private static final int MAX_RETRIES = 10;
     private static final int OPERATION_SETTLE_MS = 15; // 10 might be enough analyze, but maybe writes need more?
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final DateTimeFormatter TAG_LOG_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm:ss");
+    private static boolean tagFileLoggingEnabled;
+    private static Path tagFileLoggingPath;
 
     public static void main(String[] args) {
         List<ReaderConfig> readers;
@@ -68,6 +78,8 @@ public class Main {
         }
 
         boolean corsAnyHost = ConfigLoader.isCorsAnyHost();
+        tagFileLoggingEnabled = ConfigLoader.isTagFileLoggingEnabled();
+        tagFileLoggingPath = Path.of(ConfigLoader.getTagFileLoggingPath());
 
         log = LoggerFactory.getLogger(Main.class);
         String effectiveLogLevel = System.getProperty("org.slf4j.simpleLogger.defaultLogLevel", "info");
@@ -75,6 +87,7 @@ public class Main {
             configuredLogLevel == null || configuredLogLevel.isBlank() ? "INFO" : configuredLogLevel,
             effectiveLogLevel.toUpperCase(),
             configuredLoggerLevels.size());
+        log.info("Tag file logging initialized (enabled={}, path={})", tagFileLoggingEnabled, tagFileLoggingPath);
 
         try {
             readers = ConfigLoader.loadReaders();
@@ -745,21 +758,7 @@ public class Main {
                             "tagType", newTag.getTagType()
                         ));
 
-                        // Logging the tagged books
-                        try
-                        {
-                            String filename= "/logs/taggingLog.csv";
-                            FileWriter fileWriter = new FileWriter(filename, true);
-                            String timestamp = new SimpleDateFormat("yyyy.MM.dd HH:mm:ss").format(new Date());
-                            String epc = newTag.getEpcHexString();
-                            String pc = newTag.getPCHexString();
-                            String logEntry = String.format("%s,%s,%s,%s\n", timestamp, readerName, mediaId, epc); 
-                            fileWriter.write(logEntry);
-                            fileWriter.close();
-                        }
-                        catch(IOException ioe) {
-                            System.err.println("IOException: " + ioe.getMessage());
-                        }
+                        logTagInitialization(readerName, mediaId, newTag);
 
                     } catch (NumberFormatException e) {
                         ctx.status(400).json(Map.of(
@@ -2189,6 +2188,47 @@ public class Main {
             hex.append(String.format("%02X", b));
         }
         return hex.toString();
+    }
+
+    private static void logTagInitialization(String readerName, String mediaId, Tag newTag) {
+        if (!tagFileLoggingEnabled) {
+            return;
+        }
+
+        String timestamp = LocalDateTime.now().format(TAG_LOG_TIMESTAMP_FORMAT);
+        String logEntry = String.join(",",
+            escapeCsv(timestamp),
+            escapeCsv(readerName),
+            escapeCsv(mediaId),
+            escapeCsv(newTag.getEpcHexString())
+        ) + System.lineSeparator();
+
+        try {
+            Path parent = tagFileLoggingPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+
+            Files.writeString(
+                tagFileLoggingPath,
+                logEntry,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND
+            );
+        } catch (IOException e) {
+            log.warn("Failed to append tag log entry to {}: {}", tagFileLoggingPath, e.getMessage());
+        }
+    }
+
+    private static String escapeCsv(String value) {
+        if (value == null) {
+            return "";
+        }
+        if (value.indexOf(',') < 0 && value.indexOf('"') < 0 && value.indexOf('\n') < 0 && value.indexOf('\r') < 0) {
+            return value;
+        }
+        return '"' + value.replace("\"", "\"\"") + '"';
     }
 
     private record ReadResult(int returnCode, DataBuffer data, int lastIsoError) {}

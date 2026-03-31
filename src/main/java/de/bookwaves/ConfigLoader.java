@@ -27,6 +27,8 @@ public class ConfigLoader {
         private String logLevel;
         private Map<String, String> loggers;
         private Boolean corsAnyHost;
+        private Boolean tagFileLoggingEnabled;
+        private String tagFileLoggingPath;
 
         public List<ReaderConfig> getReaders() {
             return readers;
@@ -74,6 +76,24 @@ public class ConfigLoader {
 
         public void setCorsAnyHost(boolean corsAnyHost) {
             this.corsAnyHost = corsAnyHost;
+        }
+
+        public boolean isTagFileLoggingEnabled() {
+            return tagFileLoggingEnabled != null ? tagFileLoggingEnabled : true;
+        }
+
+        public void setTagFileLoggingEnabled(boolean tagFileLoggingEnabled) {
+            this.tagFileLoggingEnabled = tagFileLoggingEnabled;
+        }
+
+        public String getTagFileLoggingPath() {
+            return (tagFileLoggingPath != null && !tagFileLoggingPath.isBlank())
+                ? tagFileLoggingPath
+                : "/logs/taggingLog.csv";
+        }
+
+        public void setTagFileLoggingPath(String tagFileLoggingPath) {
+            this.tagFileLoggingPath = tagFileLoggingPath;
         }
     }
 
@@ -180,5 +200,27 @@ public class ConfigLoader {
             return false;
         }
         return globalConfig.isCorsAnyHost();
+    }
+
+    /**
+     * Whether successful tag initializations should be written to a CSV file.
+     * Defaults to true when not specified.
+     */
+    public static boolean isTagFileLoggingEnabled() {
+        if (globalConfig == null) {
+            return true;
+        }
+        return globalConfig.isTagFileLoggingEnabled();
+    }
+
+    /**
+     * Path to CSV file used for tag initialization logging.
+     * Defaults to /logs/taggingLog.csv when not specified.
+     */
+    public static String getTagFileLoggingPath() {
+        if (globalConfig == null) {
+            return "/logs/taggingLog.csv";
+        }
+        return globalConfig.getTagFileLoggingPath();
     }
 }
