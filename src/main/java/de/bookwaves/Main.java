@@ -29,6 +29,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -1276,6 +1277,38 @@ public class Main {
             throw new Exception("Multiple tags found - please ensure only one tag is in the field");
         }
 
+        byte[] killPassword = newTag.getKillPassword();
+        byte[] accessPassword = newTag.getAccessPassword();
+        byte[] pcBytes = newTag.getPc();
+        byte[] epcBytes = newTag.getEpc();
+
+        if (killPassword == null || killPassword.length != 4) {
+            throw new Exception("Invalid kill password length for initialization (expected 4 bytes, got " +
+                (killPassword == null ? 0 : killPassword.length) + ")");
+        }
+        if (accessPassword == null || accessPassword.length != 4) {
+            throw new Exception("Invalid access password length for initialization (expected 4 bytes, got " +
+                (accessPassword == null ? 0 : accessPassword.length) + ")");
+        }
+        if (pcBytes == null || pcBytes.length != 2) {
+            throw new Exception("Invalid PC length for initialization (expected 2 bytes, got " +
+                (pcBytes == null ? 0 : pcBytes.length) + ")");
+        }
+        if (epcBytes == null || epcBytes.length == 0 || (epcBytes.length % 2) != 0) {
+            throw new Exception("Invalid EPC length for initialization (must be non-empty and even number of bytes, got " +
+                (epcBytes == null ? 0 : epcBytes.length) + ")");
+        }
+
+        // Keep expected write payloads for post-write verification before locking.
+        byte[] bothPasswords = new byte[8];
+        System.arraycopy(killPassword, 0, bothPasswords, 0, 4);
+        System.arraycopy(accessPassword, 0, bothPasswords, 4, 4);
+
+        byte[] pcAndEpc = new byte[pcBytes.length + epcBytes.length];
+        System.arraycopy(pcBytes, 0, pcAndEpc, 0, pcBytes.length);
+        System.arraycopy(epcBytes, 0, pcAndEpc, pcBytes.length, epcBytes.length);
+        int totalBlocks = pcAndEpc.length / 2; // PC (1 block) + EPC (variable) blocks
+
         // Get the tag handler
         try (ThBase handler = reader.hm().createTagHandler(0)) {
             if (!(handler instanceof ThEpcClass1Gen2)) {
@@ -1287,10 +1320,6 @@ public class Main {
             // Step 1: Write kill + access passwords together to Reserved bank (with retry)
             // Kill password at word 0-1 (4 bytes), access password at word 2-3 (4 bytes)
             // Total: 8 bytes = 4 blocks, starting at word 0
-            byte[] bothPasswords = new byte[8];
-            System.arraycopy(newTag.getKillPassword(), 0, bothPasswords, 0, 4);
-            System.arraycopy(newTag.getAccessPassword(), 0, bothPasswords, 4, 4);
-
             DataBuffer passwordsData = new DataBuffer(bothPasswords);
             returnCode = writeWithRetry(
                 epcTag,
@@ -1308,13 +1337,7 @@ public class Main {
             pauseBetweenOperations("INIT_PASSWORDS_WRITE -> INIT_PC_EPC_WRITE", newTag.getEpcHexString());
 
             // Step 2: Write PC + EPC together (PC is 1 word = 1 block, EPC follows immediately)
-            // Combine PC and EPC into single buffer
-            byte[] pcAndEpc = new byte[newTag.getPc().length + newTag.getEpc().length];
-            System.arraycopy(newTag.getPc(), 0, pcAndEpc, 0, newTag.getPc().length);
-            System.arraycopy(newTag.getEpc(), 0, pcAndEpc, newTag.getPc().length, newTag.getEpc().length);
-
             DataBuffer pcEpcData = new DataBuffer(pcAndEpc);
-            int totalBlocks = pcAndEpc.length / 2; // PC (1 block) + EPC (8 blocks for DE290) = 9 blocks
 
             returnCode = writeWithRetry(
                 epcTag,
@@ -1339,21 +1362,79 @@ public class Main {
         }
 
         returnCode = reader.hm().inventory(true, inventoryParam);
-        if (returnCode != ErrorCode.Ok || reader.hm().itemCount() == 0) {
-            throw new Exception("Failed to re-select tag after EPC write: " + reader.lastErrorStatusText());
+        if (returnCode != ErrorCode.Ok) {
+            throw new Exception("Failed to re-inventory after EPC write (code=" + returnCode + ") : " +
+                reader.lastErrorStatusText());
         }
 
-        // Verify the tag has the correct NEW EPC and lock with a fresh handler
+        long postWriteItemCount = reader.hm().itemCount();
+        if (postWriteItemCount == 0) {
+            throw new Exception("No tag found after EPC write - refusing to lock without positive verification");
+        }
+        if (postWriteItemCount > 1) {
+            throw new Exception("Multiple tags found after EPC write (count=" + postWriteItemCount +
+                ") - refusing to lock due to ambiguous target");
+        }
+
+        // Verify the tag has the correct NEW EPC, verify data by read-back, then lock.
         String expectedEpcHex = newTag.getEpcHexString();
         try (ThEpcClass1Gen2 freshEpcTag = findTagByEpc(reader, expectedEpcHex)) {
             if (freshEpcTag == null) {
                 throw new Exception("Tag EPC verification failed - expected " + expectedEpcHex + " but not found in field");
             }
 
-            // Step 3: Lock memory banks (now using fresh tag handler)
+            DataBuffer accessPwdData = new DataBuffer(accessPassword);
+
+            // Step 3: Verify Reserved bank (kill + access passwords) before lock.
+            DataBuffer reservedVerifyData = new DataBuffer();
+            returnCode = readWithRetry(
+                freshEpcTag,
+                ThEpcClass1Gen2.Bank.Reserved,
+                0,
+                4,
+                reservedVerifyData,
+                accessPwdData
+            );
+
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to verify Reserved bank before lock: " + reader.lastErrorStatusText() +
+                    " (ISO error: " + freshEpcTag.lastIsoError() + ")");
+            }
+
+            byte[] actualReserved = reservedVerifyData.data();
+            if (!Arrays.equals(actualReserved, bothPasswords)) {
+                throw new Exception("Reserved bank verification mismatch before lock (expected=" +
+                    bytesToHex(bothPasswords) + ", actual=" + bytesToHex(actualReserved) + ")");
+            }
+
+            pauseBetweenOperations("INIT_RESERVED_VERIFY -> INIT_EPC_VERIFY", expectedEpcHex);
+
+            // Step 4: Verify PC+EPC data before lock.
+            DataBuffer epcVerifyData = new DataBuffer();
+            returnCode = readWithRetry(
+                freshEpcTag,
+                ThEpcClass1Gen2.Bank.Epc,
+                1,
+                totalBlocks,
+                epcVerifyData
+            );
+
+            if (returnCode != ErrorCode.Ok) {
+                throw new Exception("Failed to verify EPC bank before lock: " + reader.lastErrorStatusText() +
+                    " (ISO error: " + freshEpcTag.lastIsoError() + ")");
+            }
+
+            byte[] actualPcEpc = epcVerifyData.data();
+            if (!Arrays.equals(actualPcEpc, pcAndEpc)) {
+                throw new Exception("EPC/PC verification mismatch before lock (expected=" +
+                    bytesToHex(pcAndEpc) + ", actual=" + bytesToHex(actualPcEpc) + ")");
+            }
+
+            pauseBetweenOperations("INIT_EPC_VERIFY -> INIT_LOCK", expectedEpcHex);
+
+            // Step 5: Lock memory banks only after successful read-back verification.
             // Lock kill password, access password, and EPC memory
             // Parameters: kill, access, epc, tid, user
-            DataBuffer accessPwdData = new DataBuffer(newTag.getAccessPassword());
             returnCode = lockWithRetry(
                 freshEpcTag,
                 LockParam.Lock,      // Lock kill password
@@ -1365,7 +1446,8 @@ public class Main {
             );
 
             if (returnCode != ErrorCode.Ok) {
-                throw new Exception("Failed to lock memory banks: " + reader.lastErrorStatusText() +
+                throw new Exception("Failed to lock memory banks after successful write verification for EPC " +
+                                  expectedEpcHex + ": " + reader.lastErrorStatusText() +
                                   " (ISO error: " + freshEpcTag.lastIsoError() + ")");
             }
         }
@@ -1541,7 +1623,8 @@ public class Main {
 
         // Step 1: Read TID bank (96 bits = 12 bytes = 6 words)
         DataBuffer tidData = new DataBuffer();
-        returnCode = epcTag.readMultipleBlocks(
+        returnCode = readWithRetry(
+            epcTag,
             ThEpcClass1Gen2.Bank.Tid,
             0, // Start at word 0
             6, // Read 6 words (12 bytes = 96 bits)
@@ -2317,6 +2400,51 @@ public class Main {
     }
 
     /**
+     * Read from a selected tag handler with retry logic for transient RF errors.
+     */
+    private static int readWithRetry(ThEpcClass1Gen2 epcTag, ThEpcClass1Gen2.Bank bank,
+                                     int startBlock, int blockCount, DataBuffer data) {
+        return readWithRetry(epcTag, bank, startBlock, blockCount, data, null);
+    }
+
+    /**
+     * Read from a selected tag handler with retry logic and optional authentication.
+     */
+    private static int readWithRetry(ThEpcClass1Gen2 epcTag, ThEpcClass1Gen2.Bank bank,
+                                     int startBlock, int blockCount, DataBuffer data, DataBuffer password) {
+        int lastReturnCode = -1;
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            int returnCode = (password != null)
+                ? epcTag.readMultipleBlocks(bank, startBlock, blockCount, data, password)
+                : epcTag.readMultipleBlocks(bank, startBlock, blockCount, data);
+            lastReturnCode = returnCode;
+
+            if (returnCode == ErrorCode.Ok) {
+                if (attempt > 1) {
+                    log.info("Read from {}[{}] succeeded on attempt {}/{}",
+                        bank, startBlock, attempt, MAX_RETRIES);
+                }
+                return returnCode;
+            }
+
+            log.warn("Read from {}[{}] failed on attempt {}/{} (error: {} iso: {})",
+                bank, startBlock, attempt, MAX_RETRIES, returnCode, epcTag.lastIsoError());
+
+            if (attempt < MAX_RETRIES) {
+                try {
+                    Thread.sleep(OPERATION_SETTLE_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Read retry interrupted");
+                    return lastReturnCode;
+                }
+            }
+        }
+
+        return lastReturnCode;
+    }
+
+    /**
      * Write to tag with retry logic for transient RF errors (no authentication).
      * @param epcTag Tag handler to write to
      * @param bank Memory bank to write
@@ -2357,8 +2485,8 @@ public class Main {
                 return returnCode;
             }
             
-            log.warn("Write to {}[{}] failed on attempt {}/{} (error: {})", 
-                bank, startBlock, attempt, MAX_RETRIES, returnCode);
+            log.warn("Write to {}[{}] failed on attempt {}/{} (error: {} iso: {})", 
+                bank, startBlock, attempt, MAX_RETRIES, returnCode, epcTag.lastIsoError());
             
             if (attempt < MAX_RETRIES) {
                 try {
@@ -2399,8 +2527,8 @@ public class Main {
                 return returnCode;
             }
             
-            log.warn("Lock operation failed on attempt {}/{} (error: {})", 
-                attempt, MAX_RETRIES, returnCode);
+            log.warn("Lock operation failed on attempt {}/{} (error: {} iso: {})", 
+                attempt, MAX_RETRIES, returnCode, epcTag.lastIsoError());
             
             if (attempt < MAX_RETRIES) {
                 try {
