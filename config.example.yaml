@@ -52,3 +52,9 @@ readers:
     listenerPort: 20001
     mode: notification
     antennas: [1,2]
+  - name: reader3
+    address: 192.168.1.75
+    port: 10001
+    listenerPort: 20002
+    mode: notification
+    antennas: [1]
