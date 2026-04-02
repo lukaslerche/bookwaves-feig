@@ -120,6 +120,8 @@ readers:
 - If `tagFileLoggingEnabled` is true, ensure `tagFileLoggingPath` is writable in the runtime (in Docker, mount that path to persist logs)
 
 ### Configuring the RFID reader with ISOStart or web interface
+NOTE: This configuration is meant for the newer UHF readers like MRU400. These are the ones that already have an integraed web interface. The condifiguration for order devices is slightly different and will be added here in the future.
+
 To make an RFID reader work in host mode or notification mode, you need to configure it properly using the ISOStart software or the reader's web interface (web interface only on MRU400). The exact steps depend on your reader model and firmware version, but generally include:
 
 #### Both modes:
