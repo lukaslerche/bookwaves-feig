@@ -2,6 +2,7 @@ package de.bookwaves;
 
 import de.bookwaves.tag.Tag;
 import de.bookwaves.tag.TagFactory;
+import de.feig.fedm.BrmItem;
 import de.feig.fedm.ErrorCode;
 import de.feig.fedm.IConnectListener;
 import de.feig.fedm.IReaderListener;
@@ -119,7 +120,10 @@ public class NotificationListener implements IReaderListener, IConnectListener {
 
             while (eventType != EventType.Invalid) {
                 switch (eventType) {
-                    case TagEvent:
+                    case BrmEvent: // This is supported by the old readers
+                        processBrmEvent();
+                        break;
+                    case TagEvent: // This (and all following) is supported by the new readers
                         processTagEvent();
                         break;
                     case IdentificationEvent:
@@ -130,6 +134,9 @@ public class NotificationListener implements IReaderListener, IConnectListener {
                         break;
                     case DiagEvent:
                         log.debug("Diagnostic event received");
+                        break;
+                    case PeopleCounterEvent: // This is supported by new and old readers
+                        log.debug("People counter event received");
                         break;
                     default:
                         log.debug("Unknown event type: {}", eventType);
@@ -153,52 +160,73 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         
         while (tagEvent != null) {
             if (tagEvent.tag().isValid()) {
-                NotificationEvent event = new NotificationEvent();
-                event.timestamp = nowTimestamp();
-                event.eventType = "TAG_EVENT";
-                event.epc = tagEvent.tag().iddToHexString();
-                enrichEventWithTagMetadata(event);
-                latestTagItemsByEpc.put(event.epc.toUpperCase(Locale.ROOT), tagEvent.tag());
-                
-                // Extract RSSI values
-                List<NotificationEvent.AntennaRssi> rssiList = new ArrayList<>();
-                for (RssiItem rssiItem : tagEvent.tag().rssiValues()) {
-                    if (rssiItem.isValid()) {
-                        int antennaNumber = rssiItem.antennaNumber();
-                        if (allowedAntennas.isEmpty() || allowedAntennas.contains(antennaNumber)) {
-                            rssiList.add(new NotificationEvent.AntennaRssi(
-                                antennaNumber,
-                                rssiItem.rssi()
-                            ));
-                        }
-                    }
-                }
-
-                if (!allowedAntennas.isEmpty() && !tagEvent.tag().rssiValues().isEmpty() && rssiList.isEmpty()) {
-                    log.debug("Dropped tag event {} due to non-configured antenna RSSI values", event.epc);
-                    tagEvent = reader.tagEvent().popItem();
-                    continue;
-                }
-
-                event.rssiValues = rssiList;
-                
-                // Extract timestamp if valid
-                if (tagEvent.dateTime().isValid()) {
-                    event.readerTimestamp = tagEvent.dateTime().toString();
-                }
-
-                updatePresence(event);
-                
-                addEvent(event);
-                log.debug("Tag event: {} (RSSI values: {})", event.epc, 
-                    rssiList.stream()
-                        .map(r -> String.format("Ant%d:%ddBm", r.antennaNumber, r.rssi))
-                        .reduce((a, b) -> a + ", " + b)
-                        .orElse("none"));
+                String readerTimestamp = tagEvent.dateTime().isValid() ? tagEvent.dateTime().toString() : null;
+                processTagObservation(tagEvent.tag(), readerTimestamp, "Tag event");
             }
             
             tagEvent = reader.tagEvent().popItem();
         }
+    }
+
+    private void processBrmEvent() {
+        BrmItem brmItem = reader.brm().popItem();
+
+        while (brmItem != null) {
+            if (brmItem.tag().isValid()) {
+                String readerTimestamp = brmItem.dateTime().isValid() ? brmItem.dateTime().toString() : null;
+                processTagObservation(brmItem.tag(), readerTimestamp, "Brm event");
+            }
+
+            brmItem = reader.brm().popItem();
+        }
+    }
+
+    private void processTagObservation(TagItem tagItem, String readerTimestamp, String sourceLogName) {
+        NotificationEvent event = new NotificationEvent();
+        event.timestamp = nowTimestamp();
+        event.eventType = "TAG_EVENT";
+        event.epc = tagItem.iddToHexString();
+        enrichEventWithTagMetadata(event);
+        latestTagItemsByEpc.put(event.epc.toUpperCase(Locale.ROOT), tagItem);
+
+        // Keep old/new-reader event handling consistent and reuse antenna filtering.
+        List<NotificationEvent.AntennaRssi> rssiList = extractAllowedRssiValues(tagItem);
+        if (shouldDropByAntennaFilter(tagItem, rssiList)) {
+            log.debug("Dropped {} {} due to non-configured antenna RSSI values", sourceLogName, event.epc);
+            return;
+        }
+
+        event.rssiValues = rssiList;
+        event.readerTimestamp = readerTimestamp;
+
+        updatePresence(event);
+        addEvent(event);
+
+        log.debug("{}: {} (RSSI values: {})", sourceLogName, event.epc,
+            rssiList.stream()
+                .map(r -> String.format("Ant%d:%ddBm", r.antennaNumber, r.rssi))
+                .reduce((a, b) -> a + ", " + b)
+                .orElse("none"));
+    }
+
+    private List<NotificationEvent.AntennaRssi> extractAllowedRssiValues(TagItem tagItem) {
+        List<NotificationEvent.AntennaRssi> rssiList = new ArrayList<>();
+        for (RssiItem rssiItem : tagItem.rssiValues()) {
+            if (rssiItem.isValid()) {
+                int antennaNumber = rssiItem.antennaNumber();
+                if (allowedAntennas.isEmpty() || allowedAntennas.contains(antennaNumber)) {
+                    rssiList.add(new NotificationEvent.AntennaRssi(
+                        antennaNumber,
+                        rssiItem.rssi()
+                    ));
+                }
+            }
+        }
+        return rssiList;
+    }
+
+    private boolean shouldDropByAntennaFilter(TagItem tagItem, List<NotificationEvent.AntennaRssi> rssiList) {
+        return !allowedAntennas.isEmpty() && !tagItem.rssiValues().isEmpty() && rssiList.isEmpty();
     }
 
     public TagItem getLatestTagItemByEpc(String epcHex) {
