@@ -15,7 +15,7 @@
 		}
 	},
 
-	"appPort": ["7070:7070", "20001:20001"]
+	"appPort": ["7070:7070", "20001:20001", "20002:20002"]
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
