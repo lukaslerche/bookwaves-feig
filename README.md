@@ -120,31 +120,35 @@ readers:
 - If `tagFileLoggingEnabled` is true, ensure `tagFileLoggingPath` is writable in the runtime (in Docker, mount that path to persist logs)
 
 ### Configuring the RFID reader with ISOStart or web interface
-NOTE: This configuration is meant for the newer UHF readers like MRU400. These are the ones that already have an integraed web interface. The condifiguration for order devices is slightly different and will be added here in the future.
 
 To make an RFID reader work in host mode or notification mode, you need to configure it properly using the ISOStart software or the reader's web interface (web interface only on MRU400). The exact steps depend on your reader model and firmware version, but generally include:
 
-#### Both modes:
+#### Both modes
 1. Connect to the reader using ISOStart software or web interface (usually at `https://IP-OF-READER:8443/`)
 2. (Recommended) Configure "AirInterface -> UHF" to reduce the antenna power (loewest for a checkout terminal, higher for a gate)
 3. (Recommended) Also in "AirInterface -> UHF" set a RSSIFilter to ignore weakly read tags (e.g. 40 for a checkout terminal, higher for a gate) to avoid reading tags outside the intended read range
 
-Note: Both power and filter need to be tested and adjusted according to the physical setup, antenna gain, and desired read range. Too high power or too low filter values may cause unintended reads of tags outside the intended area.
+NOTE: Both power and filter need to be tested and adjusted according to the physical setup, antenna gain, and desired read range. Too high power or too low filter values may cause unintended reads of tags outside the intended area.
 
 #### Host mode configuration
 
 1. Set the operating mode "OperatingMode" to "Host mode"
 2. Reduce "Transponder -> PersistenceReset" for each antenna to e.g. `1 x 5ms`. This is needed to submit subsequent requets to an RFID tag quickly.
+   - NOTE: This setting is not exposed by the ISOStart software for older models (e.g. MRU102). For those you need to set them manually via TCP configuration calls according to the documentation (CFG16: Persistence Reset).
 
 #### Notification mode configuration
 1. Set the operating mode "OperatingMode" to "Notification mode"
-2. Make sure that in "OperatingMode -> AutoReadModes -> DataSelector" the "Antenna", "Date", "IDD" and "Time" are checked.
-3. In the same menu, set "Filter -> TransponderValidTime" to a low value like `10 x 100ms`. This is the rate at which the reader detechs changes (e.g. signal strength of tag) for tags already in the field. Note: new tags are detected instantly, regardless of this setting.
+2. Make sure that the correct fields are transmitted by the NotificationMode:
+   - New readers: "OperatingMode -> AutoReadModes -> DataSelector" check "Antenna", "Date", "IDD" and "Time".
+   - Old readers: "OperatingMode -> NotificationMode -> DataSelector" check  "UID", "Time", "RSSI".
+3. In the same menu, set "Filter -> TransponderValidTime" to a low value like `1 x 100ms`. This is the rate at which the reader detechs changes (e.g. signal strength of tag) for tags already in the field. Note: new tags are detected instantly, regardless of this setting.
 4. In "AirInterface -> Multiplexer", check "Enable", as well as the antennas you want to use. Here you could check multiple to make a gate or checkout terminal to use multiple antennas at the same time.
-5. In "HostInterface -> LAN -> Remote -> Channel1", set the following values:
-  - ConnectionHoldTime: 10000
-  - PortNumber: The listener port you configured for this reader in the `config.yaml` (e.g. 20001)
-  - Address: The IP on which your BookWaves-Feig software runs
+5. Set the target for new notifications to your bookwaves-feig deployment:
+   - New readers: In "HostInterface -> LAN -> Remote -> Channel1", set the following values:
+     - ConnectionHoldTime: 10000
+     - PortNumber: The listener port you configured for this reader in the `config.yaml` (e.g. 20001)
+     - Address: The IP on which your BookWaves-Feig software runs
+   - Old readers: In "OptiontingMode -> NotificationMode -> Transmission -> Destination", set similarly named values: "ConnectionHoldTime", "PortNumber", and "IPAddress" with the same values as above
 
 Note: Make sure IP:Port are reachable by the reader, since the reader pushes updates to that IP:Port combination.
 
