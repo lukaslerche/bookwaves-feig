@@ -8,15 +8,19 @@ import de.bookwaves.tag.DE6Tag;
 import de.bookwaves.tag.RawTag;
 import de.bookwaves.tag.Tag;
 import de.bookwaves.tag.TagFactory;
+import de.feig.fedm.Connector;
 import de.feig.fedm.ErrorCode;
 import de.feig.fedm.InventoryParam;
 import de.feig.fedm.ReaderModule;
+import de.feig.fedm.RequestMode;
 import de.feig.fedm.TagItem;
 import de.feig.fedm.taghandler.ThBase;
 import de.feig.fedm.taghandler.ThEpcClass1Gen2;
 import de.feig.fedm.taghandler.ThEpcClass1Gen2.Bank;
 import de.feig.fedm.taghandler.ThEpcClass1Gen2.LockParam;
+import de.feig.fedm.taghandler.ThIso15693;
 import de.feig.fedm.types.DataBuffer;
+import de.feig.fedm.types.LongRef;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -145,6 +149,157 @@ public class Main {
 
                 config.routes.get("/test", ctx -> {
                     ctx.result("Test successful");
+                });
+
+                config.routes.get("/hf", ctx -> {
+                    final String host = "192.168.1.219";
+                    final int port = 10001;
+                    final int startBlock = 0;
+                    final int blockCount = 16;
+
+                    ReaderModule hfReader = null;
+                    try {
+                        hfReader = new ReaderModule(RequestMode.UniDirectional);
+                        Connector connector = Connector.createTcpConnector(host, port);
+                        connector.setTcpConnectTimeout(5000);
+
+                        int connectCode = hfReader.connect(connector);
+                        if (connectCode != ErrorCode.Ok) {
+                            ctx.status(500).json(Map.of(
+                                "success", false,
+                                "stage", "connect",
+                                "returnCode", connectCode,
+                                "error", hfReader.lastErrorStatusText()
+                            ));
+                            return;
+                        }
+
+                        int inventoryCode = hfReader.hm().inventory();
+                        if (inventoryCode != ErrorCode.Ok) {
+                            ctx.status(500).json(Map.of(
+                                "success", false,
+                                "stage", "inventory",
+                                "returnCode", inventoryCode,
+                                "error", hfReader.lastErrorStatusText()
+                            ));
+                            return;
+                        }
+
+                        List<Map<String, Object>> tags = new ArrayList<>();
+                        long itemCount = hfReader.hm().itemCount();
+
+                        for (int i = 0; i < itemCount; i++) {
+                            TagItem tagItem = hfReader.hm().tagItem(i);
+                            if (tagItem == null || !tagItem.isValid()) {
+                                tags.add(Map.of(
+                                    "index", i,
+                                    "valid", false,
+                                    "error", "Invalid tag item"
+                                ));
+                                continue;
+                            }
+
+                            Map<String, Object> tagInfo = new LinkedHashMap<>();
+                            tagInfo.put("index", i);
+                            tagInfo.put("valid", true);
+                            tagInfo.put("idd", tagItem.iddToHexString());
+
+                            try (ThBase tagHandler = hfReader.hm().createTagHandler(i)) {
+                                if (tagHandler == null) {
+                                    tagInfo.put("readSuccess", false);
+                                    tagInfo.put("error", "Failed to create tag handler");
+                                    tags.add(tagInfo);
+                                    continue;
+                                }
+
+                                tagInfo.put("tagHandlerType", tagHandler.tagHandlerType());
+                                tagInfo.put("tagHandlerClass", tagHandler.getClass().getName());
+
+                                if (!(tagHandler instanceof ThIso15693 iso15693Tag)) {
+                                    tagInfo.put("readSuccess", false);
+                                    tagInfo.put("error", "Tag handler is not TypeIso15693");
+                                    tags.add(tagInfo);
+                                    continue;
+                                }
+
+                                DataBuffer data = new DataBuffer();
+                                LongRef blockSizeRef = new LongRef(0);
+                                int readReturnCode = iso15693Tag.readMultipleBlocks(
+                                    (long) startBlock,
+                                    (long) blockCount,
+                                    blockSizeRef,
+                                    data
+                                );
+                                int readIsoError = iso15693Tag.lastIsoError();
+
+                                String hex = data.toHexString(" ");
+                                StringBuilder asciiBuilder = new StringBuilder();
+                                if (hex != null && !hex.isBlank()) {
+                                    for (String part : hex.trim().split("\\s+")) {
+                                        if (part.isBlank()) {
+                                            continue;
+                                        }
+                                        try {
+                                            int value = Integer.parseInt(part, 16);
+                                            asciiBuilder.append((value >= 32 && value <= 126) ? (char) value : '.');
+                                        } catch (NumberFormatException ignored) {
+                                            asciiBuilder.append('.');
+                                        }
+                                    }
+                                }
+
+                                tagInfo.put("lastIsoError", readIsoError);
+
+                                if (readReturnCode == ErrorCode.Ok) {
+                                    tagInfo.put("readSuccess", true);
+                                    tagInfo.put("readMethod", "TypeIso15693.readMultipleBlocks(long,long,LongRef,DataBuffer)");
+                                    tagInfo.put("readBlockSize", blockSizeRef.getValue());
+                                    tagInfo.put("readReturnCode", readReturnCode);
+                                    tagInfo.put("readIsoError", readIsoError);
+                                    tagInfo.put("readHex", hex);
+                                    tagInfo.put("readAscii", asciiBuilder.toString());
+
+                                    log.info("HF /hf tag {} IDD={} read ok via TypeIso15693 hex={} ascii={}",
+                                        i, tagItem.iddToHexString(), hex, asciiBuilder);
+                                } else {
+                                    tagInfo.put("readSuccess", false);
+                                    tagInfo.put("error", "Failed to read blocks");
+                                    tagInfo.put("readReturnCode", readReturnCode);
+                                    tagInfo.put("readIsoError", readIsoError);
+                                    tagInfo.put("readerError", hfReader.lastErrorStatusText());
+                                    log.warn("HF /hf tag {} IDD={} read failed; readerError={}",
+                                        i, tagItem.iddToHexString(), hfReader.lastErrorStatusText());
+                                }
+                            }
+
+                            tags.add(tagInfo);
+                        }
+
+                        ctx.json(Map.of(
+                            "success", true,
+                            "reader", host + ":" + port,
+                            "inventoryReturnCode", inventoryCode,
+                            "itemCount", itemCount,
+                            "tags", tags
+                        ));
+                    } catch (Exception e) {
+                        log.error("HF /hf endpoint failed", e);
+                        ctx.status(500).json(Map.of(
+                            "success", false,
+                            "error", e.getMessage()
+                        ));
+                    } finally {
+                        if (hfReader != null) {
+                            try {
+                                if (hfReader.isConnected()) {
+                                    hfReader.disconnect();
+                                }
+                            } catch (Exception disconnectEx) {
+                                log.warn("HF /hf disconnect failed: {}", disconnectEx.getMessage());
+                            }
+                            hfReader.close();
+                        }
+                    }
                 });
 
 
