@@ -40,6 +40,8 @@ tagFileLoggingEnabled: true
 tagFileLoggingPath: /logs/taggingLog.csv
 
 # Reader configurations
+# protocol is optional and defaults to `uhf`
+# do not set `antennas` for `hf` readers
 readers:
   - name: reader1
     address: 192.168.1.100
@@ -55,6 +57,6 @@ readers:
   - name: reader3
     address: 192.168.1.75
     port: 10001
+    protocol: hf
     listenerPort: 20002
     mode: notification
-    antennas: [1]

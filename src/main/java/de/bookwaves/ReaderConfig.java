@@ -17,6 +17,7 @@ public class ReaderConfig {
     private int port;
     private Integer listenerPort;
     private String mode;
+    private String protocol;
     private List<Integer> antennas = new ArrayList<>();
 
     public ReaderConfig() {
@@ -72,6 +73,21 @@ public class ReaderConfig {
         this.mode = mode;
     }
 
+    public String getProtocol() {
+        if (protocol == null || protocol.isBlank()) {
+            return "uhf";
+        }
+        return protocol.trim().toLowerCase();
+    }
+
+    public void setProtocol(String protocol) {
+        this.protocol = protocol;
+    }
+
+    public boolean isHfProtocol() {
+        return "hf".equalsIgnoreCase(getProtocol());
+    }
+
     public List<Integer> getAntennas() {
         return antennas;
     }
@@ -102,5 +118,16 @@ public class ReaderConfig {
         }
         log().debug("Computed antenna mask 0x{} for reader {} from {}", String.format("%02X", mask), name, antennas);
         return (byte) mask;
+    }
+
+    /**
+     * Returns the effective antenna mask with protocol-specific behavior.
+     * HF readers currently run on antenna 1 only.
+     */
+    public byte getEffectiveAntennaMask() {
+        if (isHfProtocol()) {
+            return 0x01;
+        }
+        return getAntennaMask();
     }
 }

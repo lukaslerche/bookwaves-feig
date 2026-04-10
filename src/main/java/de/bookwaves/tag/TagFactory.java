@@ -3,8 +3,10 @@ package de.bookwaves.tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -164,6 +166,39 @@ public class TagFactory {
         pc[0] = (byte) ((epc.length / 2) << 3);
 
         return createTag(pc, epc);
+    }
+
+    /**
+     * Create HF tag metadata from ISO15693 read payload.
+     * Falls back to RawTag if DE361 parsing does not yield meaningful fields.
+     */
+    public static Tag createHfTagFromIso15693(String iddHex, byte[] readData) {
+        DE361Tag de361Tag = new DE361Tag(iddHex, readData);
+
+        boolean hasMediaId = de361Tag.getMediaId() != null && !de361Tag.getMediaId().isBlank();
+        boolean hasLibrarySigle = de361Tag.getLibrarySigle() != null && !de361Tag.getLibrarySigle().isBlank();
+        if (hasMediaId || hasLibrarySigle) {
+            return de361Tag;
+        }
+
+        return new RawTag(new byte[2], hexToBytes(iddHex));
+    }
+
+    private static byte[] hexToBytes(String value) {
+        if (value == null || value.isBlank()) {
+            return new byte[0];
+        }
+
+        String normalized = value.toUpperCase(Locale.ROOT).replaceAll("\\s+", "");
+        if ((normalized.length() % 2) != 0 || !normalized.matches("^[A-F0-9]+$")) {
+            return normalized.getBytes(StandardCharsets.US_ASCII);
+        }
+
+        byte[] bytes = new byte[normalized.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) Integer.parseInt(normalized.substring(i * 2, i * 2 + 2), 16);
+        }
+        return bytes;
     }
 
     private static String bytesToHexPrefix(byte[] epc) {

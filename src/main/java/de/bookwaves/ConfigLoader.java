@@ -141,9 +141,29 @@ public class ConfigLoader {
             throw new Exception("No readers found in configuration file");
         }
 
+        validateReaderConfigurations(configuration.getReaders());
+
         log().info("Loaded configuration with {} readers and {} tag password entries",
             configuration.getReaders().size(), configuration.getTagPasswords().size());
         return configuration.getReaders();
+    }
+
+    private static void validateReaderConfigurations(List<ReaderConfig> readers) throws Exception {
+        for (ReaderConfig reader : readers) {
+            if (reader == null) {
+                throw new Exception("Reader configuration entry must not be null");
+            }
+
+            if (reader.isHfProtocol() && reader.getAntennas() != null && !reader.getAntennas().isEmpty()) {
+                String readerName = reader.getName() == null || reader.getName().isBlank()
+                    ? "<unnamed>"
+                    : reader.getName();
+                throw new Exception(
+                    "Invalid reader configuration for " + readerName +
+                    ": antennas must not be configured when protocol is hf"
+                );
+            }
+        }
     }
 
     /**

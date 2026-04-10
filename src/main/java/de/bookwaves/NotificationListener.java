@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.time.LocalDateTime;
@@ -48,6 +49,7 @@ public class NotificationListener implements IReaderListener, IConnectListener {
     private volatile boolean isConnected = false;
     private final int maxQueueSize;
     private final Lock lock;
+    private final boolean hfProtocol;
     private final ConcurrentHashMap<String, TagItem> latestTagItemsByEpc = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, PresenceState> presenceByEpc = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<Consumer<NotificationEvent>> eventSubscribers = new CopyOnWriteArrayList<>();
@@ -55,12 +57,14 @@ public class NotificationListener implements IReaderListener, IConnectListener {
     private final ScheduledExecutorService presenceSweepExecutor;
     private final AtomicLong removedEventCount = new AtomicLong(0);
 
-    public NotificationListener(ReaderModule reader, int maxQueueSize, Lock lock, List<Integer> configuredAntennas) {
+    public NotificationListener(ReaderModule reader, int maxQueueSize, Lock lock, List<Integer> configuredAntennas,
+                                boolean hfProtocol) {
         this.reader = reader;
         this.maxQueueSize = maxQueueSize;
         this.eventQueue = new ConcurrentLinkedQueue<>();
         this.eventCount = new AtomicInteger(0);
         this.lock = lock;
+        this.hfProtocol = hfProtocol;
         this.allowedAntennas = new HashSet<>();
         if (configuredAntennas != null) {
             for (Integer antenna : configuredAntennas) {
@@ -161,7 +165,7 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         while (tagEvent != null) {
             if (tagEvent.tag().isValid()) {
                 String readerTimestamp = tagEvent.dateTime().isValid() ? tagEvent.dateTime().toString() : null;
-                processTagObservation(tagEvent.tag(), readerTimestamp, "Tag event");
+                processTagObservation(tagEvent.tag(), readerTimestamp, "Tag event", null);
             }
             
             tagEvent = reader.tagEvent().popItem();
@@ -174,19 +178,34 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         while (brmItem != null) {
             if (brmItem.tag().isValid()) {
                 String readerTimestamp = brmItem.dateTime().isValid() ? brmItem.dateTime().toString() : null;
-                processTagObservation(brmItem.tag(), readerTimestamp, "Brm event");
+                HfDataBlocks hfDataBlocks = extractHfDataBlocks(brmItem);
+                processTagObservation(brmItem.tag(), readerTimestamp, "Brm event", hfDataBlocks);
             }
 
             brmItem = reader.brm().popItem();
         }
     }
 
-    private void processTagObservation(TagItem tagItem, String readerTimestamp, String sourceLogName) {
+    private void processTagObservation(
+        TagItem tagItem,
+        String readerTimestamp,
+        String sourceLogName,
+        HfDataBlocks hfDataBlocks
+    ) {
         NotificationEvent event = new NotificationEvent();
         event.timestamp = nowTimestamp();
         event.eventType = "TAG_EVENT";
         event.epc = tagItem.iddToHexString();
-        enrichEventWithTagMetadata(event);
+        if (hfProtocol) {
+            enrichHfEventWithMetadata(event, hfDataBlocks);
+        } else {
+            enrichEventWithTagMetadata(event);
+        }
+        if (hfDataBlocks != null) {
+            event.hfBlockSize = hfDataBlocks.blockSize;
+            event.hfBlockCount = hfDataBlocks.blockCount;
+            event.hfBlocksHex = hfDataBlocks.blocksHex;
+        }
         latestTagItemsByEpc.put(event.epc.toUpperCase(Locale.ROOT), tagItem);
 
         // Keep old/new-reader event handling consistent and reuse antenna filtering.
@@ -227,6 +246,29 @@ public class NotificationListener implements IReaderListener, IConnectListener {
 
     private boolean shouldDropByAntennaFilter(TagItem tagItem, List<NotificationEvent.AntennaRssi> rssiList) {
         return !allowedAntennas.isEmpty() && !tagItem.rssiValues().isEmpty() && rssiList.isEmpty();
+    }
+
+    private HfDataBlocks extractHfDataBlocks(BrmItem brmItem) {
+        if (!hfProtocol || brmItem == null) {
+            return null;
+        }
+
+        try {
+            var dataBlocks = brmItem.dataBlocks();
+            if (dataBlocks == null) {
+                return null;
+            }
+
+            byte[] blocks = dataBlocks.blocks();
+            if (blocks != null) {
+                blocks = Arrays.copyOf(blocks, blocks.length);
+            }
+            String blocksHex = blocks == null ? null : bytesToHex(blocks);
+            return new HfDataBlocks(blocks, blocksHex, dataBlocks.blockSize(), dataBlocks.blockCount());
+        } catch (Exception e) {
+            log.debug("HF BRM dataBlocks extraction failed: {}", e.getMessage());
+            return null;
+        }
     }
 
     public TagItem getLatestTagItemByEpc(String epcHex) {
@@ -389,6 +431,17 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         return LocalDateTime.now().toString();
     }
 
+    private static String bytesToHex(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        StringBuilder hex = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            hex.append(String.format("%02X", value));
+        }
+        return hex.toString();
+    }
+
     private static int bestRssi(List<NotificationEvent.AntennaRssi> rssiValues) {
         if (rssiValues == null || rssiValues.isEmpty()) {
             return Integer.MIN_VALUE;
@@ -419,6 +472,181 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         } catch (Exception e) {
             log.warn("Unexpected error while parsing EPC {} for notification metadata: {}", event.epc, e.getMessage());
         }
+    }
+
+    private void enrichHfEventWithMetadata(NotificationEvent event, HfDataBlocks hfDataBlocks) {
+        if (event == null || event.epc == null || event.epc.isBlank()) {
+            return;
+        }
+
+        if (hfDataBlocks == null || hfDataBlocks.blocks == null || hfDataBlocks.blocks.length == 0) {
+            event.tagType = "HFTag";
+            event.mediaId = null;
+            event.secured = false;
+            event.pc = null;
+            return;
+        }
+
+        try {
+            HfParseResult parseResult = parseHfMetadataBestEffort(event.epc, hfDataBlocks);
+            Tag parsedTag = parseResult == null ? null : parseResult.tag;
+            if (parsedTag == null) {
+                throw new IllegalStateException("Could not parse HF data blocks");
+            }
+
+            String mediaId = parsedTag.getMediaId();
+            if (mediaId != null && mediaId.isBlank()) {
+                mediaId = null;
+            }
+
+            String tagType = parsedTag.getTagType();
+            if (parsedTag instanceof de.bookwaves.tag.RawTag) {
+                tagType = "HFTag";
+                mediaId = null;
+            }
+
+            if (parseResult != null && !"as-is".equals(parseResult.transformName)) {
+                log.debug("HF notification data normalized for {} using {} (mediaId={})",
+                    event.epc, parseResult.transformName, mediaId);
+            }
+
+            event.tagType = tagType;
+            event.mediaId = mediaId;
+            event.secured = false;
+            event.pc = null;
+        } catch (Exception e) {
+            log.debug("HF metadata enrichment from dataBlocks failed for {}: {}", event.epc, e.getMessage());
+            event.tagType = "HFTag";
+            event.mediaId = null;
+            event.secured = false;
+            event.pc = null;
+        }
+    }
+
+    private HfParseResult parseHfMetadataBestEffort(String epc, HfDataBlocks hfDataBlocks) {
+        List<HfParseCandidate> candidates = new ArrayList<>();
+        addCandidateIfDistinct(candidates, hfDataBlocks.blocks, "as-is");
+
+        int blockSize = normalizeBlockSize(hfDataBlocks.blockSize, hfDataBlocks.blocks.length);
+        if (blockSize > 1) {
+            addCandidateIfDistinct(candidates,
+                reverseBytesPerBlock(hfDataBlocks.blocks, blockSize),
+                "reverse-bytes-per-block");
+            addCandidateIfDistinct(candidates,
+                swapBytePairsPerBlock(hfDataBlocks.blocks, blockSize),
+                "swap-byte-pairs-per-block");
+        }
+
+        HfParseResult best = null;
+        for (HfParseCandidate candidate : candidates) {
+            try {
+                Tag parsedTag = TagFactory.createHfTagFromIso15693(epc, candidate.blocks);
+                int score = scoreHfTagParse(parsedTag);
+                if (best == null || score > best.score) {
+                    best = new HfParseResult(parsedTag, candidate.transformName, score);
+                }
+            } catch (Exception ignored) {
+                // Keep trying fallback candidates.
+            }
+        }
+
+        return best;
+    }
+
+    private static int scoreHfTagParse(Tag parsedTag) {
+        if (parsedTag == null || parsedTag instanceof de.bookwaves.tag.RawTag) {
+            return Integer.MIN_VALUE;
+        }
+
+        String mediaId = parsedTag.getMediaId();
+        if (mediaId == null || mediaId.isBlank()) {
+            return -100;
+        }
+
+        int score = 0;
+        if (mediaId.matches("^[0-9]{1,4}/[0-9]{6,12}\\+[0-9]{2}$")) {
+            score += 100;
+        }
+        if (mediaId.matches("^[0-9/+\\-]+$")) {
+            score += 25;
+        }
+        if (mediaId.contains("/")) {
+            score += 10;
+        }
+        if (mediaId.contains("+")) {
+            score += 10;
+        }
+        if (mediaId.matches(".*[A-Za-z].*")) {
+            score -= 25;
+        }
+        if (mediaId.length() >= 10 && mediaId.length() <= 20) {
+            score += 10;
+        }
+
+        if (parsedTag instanceof de.bookwaves.tag.DE361Tag de361Tag) {
+            score += 5;
+            String librarySigle = de361Tag.getLibrarySigle();
+            if (librarySigle != null && !librarySigle.isBlank()) {
+                score += 5;
+            }
+        }
+
+        return score;
+    }
+
+    private static int normalizeBlockSize(long blockSizeLong, int dataLength) {
+        if (blockSizeLong <= 1L || blockSizeLong > Integer.MAX_VALUE) {
+            return 0;
+        }
+
+        int blockSize = (int) blockSizeLong;
+        if (blockSize > dataLength) {
+            return 0;
+        }
+        return blockSize;
+    }
+
+    private static byte[] reverseBytesPerBlock(byte[] input, int blockSize) {
+        byte[] output = Arrays.copyOf(input, input.length);
+        for (int start = 0; start < output.length; start += blockSize) {
+            int end = Math.min(start + blockSize, output.length) - 1;
+            int left = start;
+            while (left < end) {
+                byte tmp = output[left];
+                output[left] = output[end];
+                output[end] = tmp;
+                left++;
+                end--;
+            }
+        }
+        return output;
+    }
+
+    private static byte[] swapBytePairsPerBlock(byte[] input, int blockSize) {
+        byte[] output = Arrays.copyOf(input, input.length);
+        for (int start = 0; start < output.length; start += blockSize) {
+            int end = Math.min(start + blockSize, output.length);
+            for (int i = start; i + 1 < end; i += 2) {
+                byte tmp = output[i];
+                output[i] = output[i + 1];
+                output[i + 1] = tmp;
+            }
+        }
+        return output;
+    }
+
+    private static void addCandidateIfDistinct(List<HfParseCandidate> candidates, byte[] blocks, String transformName) {
+        if (blocks == null) {
+            return;
+        }
+
+        for (HfParseCandidate existing : candidates) {
+            if (Arrays.equals(existing.blocks, blocks)) {
+                return;
+            }
+        }
+
+        candidates.add(new HfParseCandidate(Arrays.copyOf(blocks, blocks.length), transformName));
     }
 
     public void close() {
@@ -495,6 +723,9 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         public String epc;
         public List<AntennaRssi> rssiValues;
         public String readerTimestamp;
+        public Long hfBlockSize;
+        public Long hfBlockCount;
+        public String hfBlocksHex;
         public boolean stable;
         public int seenCount;
         public long presenceDurationMs;
@@ -528,4 +759,8 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         volatile String lastTagType;
         volatile String lastPc;
     }
+
+    private record HfDataBlocks(byte[] blocks, String blocksHex, long blockSize, long blockCount) {}
+    private record HfParseCandidate(byte[] blocks, String transformName) {}
+    private record HfParseResult(Tag tag, String transformName, int score) {}
 }

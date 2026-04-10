@@ -66,9 +66,10 @@ See `config.example.yaml` for the complete configuration template.
 
 **Reader configurations:**
 - Name, IP address, port
+- Protocol: optional; `uhf` is used when omitted, or set `hf`
 - Listener port (`listenerPort`) for reader push notifications to this service
 - Operating mode: `host` or `notification`
-- Antenna numbers (as array)
+- Antenna numbers (as array, optional). Do not set for `hf` readers.
 
 ### Example Configuration
 
@@ -103,14 +104,18 @@ readers:
   - name: "reader2"
     address: "192.168.1.70"
     port: 10001
+    protocol: "hf"
     listenerPort: 20001
     mode: notification
-    antennas: [1,2]
 ```
 
 **Mode values:**
 - `host` - Polling mode for manual inventory scans. Needed for other modes of BookWaves
 - `notification` - Event-driven automatic tag detection. Needed for checkout and gate modes of BookWaves
+
+**Protocol values:**
+- `uhf` - EPC Gen2 flow (default when omitted)
+- `hf` - ISO15693 flow. The `antennas` field must be omitted for HF readers.
 
 **Important notes:**
 - Only configure passwords for tag formats you actually use
@@ -149,6 +154,7 @@ NOTE: Both power and filter need to be tested and adjusted according to the phys
      - PortNumber: The listener port you configured for this reader in the `config.yaml` (e.g. 20001)
      - Address: The IP on which your BookWaves-Feig software runs
    - Old readers: In "OptiontingMode -> NotificationMode -> Transmission -> Destination", set similarly named values: "ConnectionHoldTime", "PortNumber", and "IPAddress" with the same values as above
+   - Old HF readers (MR102): Set to transmit also "Data -> Data" and start at byte 0, transmit 16 bytes, LSB first. This transmits the media ID in notification mode without needing to read the tag first, which is required for HF tags since they transmit their unique ID in notifications by default.
 
 Note: Make sure IP:Port are reachable by the reader, since the reader pushes updates to that IP:Port combination.
 

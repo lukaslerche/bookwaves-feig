@@ -278,7 +278,13 @@ public class ReaderManager {
                 // Ensure reader is initialized and currently connected
                 getModule();
 
-                notificationListener = new NotificationListener(readerModule, 1000, lock, config.getAntennas());
+                notificationListener = new NotificationListener(
+                    readerModule,
+                    1000,
+                    lock,
+                    config.getAntennas(),
+                    config.isHfProtocol()
+                );
                 
                 int state = readerModule.async().startNotification(notificationListener);
                 if (state != ErrorCode.Ok) {
@@ -386,6 +392,15 @@ public class ReaderManager {
     }
 
     public void registerReader(ReaderConfig config) {
+        if (config.isHfProtocol() && config.getAntennas() != null && !config.getAntennas().isEmpty()) {
+            throw new IllegalArgumentException(
+                "Reader " + config.getName() + " uses protocol hf and must not define antennas"
+            );
+        }
+
+        if (config.isHfProtocol()) {
+            log.info("HF reader {} registered without configured antennas", config.getName());
+        }
         readers.put(config.getName(), new ManagedReader(config));
     }
 

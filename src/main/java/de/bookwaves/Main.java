@@ -48,6 +48,8 @@ public class Main {
     // Shared operation pacing and retry configuration for RF operations
     private static final int MAX_RETRIES = 10;
     private static final int OPERATION_SETTLE_MS = 15; // 10 might be enough analyze, but maybe writes need more?
+    private static final int HF_READ_START_BLOCK = 0;
+    private static final int HF_READ_BLOCK_COUNT = 16;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final DateTimeFormatter TAG_LOG_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm:ss");
     private static boolean tagFileLoggingEnabled;
@@ -120,8 +122,8 @@ public class Main {
             
             for (ReaderConfig config : readers) {
                 readerManager.registerReader(config);
-                log.info("Registered reader: {} (mode: {}, antennas: {})", 
-                    config.getName(), config.getMode(), config.getAntennas());
+                log.info("Registered reader: {} (protocol: {}, mode: {}, antennas: {})",
+                    config.getName(), config.getProtocol(), config.getMode(), config.getAntennas());
             }
         } catch (Exception e) {
             log.error("Failed to process reader configuration", e);
@@ -595,9 +597,10 @@ public class Main {
                         readerInfo.put("address", readerConfig.getAddress());
                         readerInfo.put("port", readerConfig.getPort());
                         readerInfo.put("listenerPort", readerConfig.getListenerPort());
+                        readerInfo.put("protocol", readerConfig.getProtocol());
                         readerInfo.put("mode", readerConfig.getMode());
                         readerInfo.put("antennas", readerConfig.getAntennas());
-                        readerInfo.put("antennaMask", String.format("0x%02X", readerConfig.getAntennaMask()));
+                        readerInfo.put("antennaMask", String.format("0x%02X", readerConfig.getEffectiveAntennaMask()));
                         readerInfo.put("isConnected", isConnected);
                         readerInfo.put("connectionStatus", connectionStatus);
                         if (!isConnected && managedReader.getLastConnectionError() != null) {
@@ -634,15 +637,19 @@ public class Main {
 
                     try {
                         ReaderModule reader = managedReader.getModule();
-                        
-                        InventoryParam inventoryParam = new InventoryParam();
-                        inventoryParam.setAntennas(managedReader.getConfig().getAntennaMask());
 
                         // do this code 3 times
                         //for (int d = 0; d < 3; d++) {
                             //log.info(reader.isConnected() ? ">>> Reader is connected." : "Reader is not connected.");
 
-                            int returnCode = reader.hm().inventory(true, inventoryParam);
+                            int returnCode;
+                            if (isHfReaderConfig(managedReader.getConfig())) {
+                                returnCode = reader.hm().inventory();
+                            } else {
+                                InventoryParam inventoryParam = new InventoryParam();
+                                inventoryParam.setAntennas(managedReader.getConfig().getEffectiveAntennaMask());
+                                returnCode = reader.hm().inventory(true, inventoryParam);
+                            }
                             log.debug("Reader last error state: {}", reader.lastErrorStatusText());
                             if (returnCode != ErrorCode.Ok) {
                                 ctx.status(500).result("Inventory command failed: " + returnCode);
@@ -744,10 +751,14 @@ public class Main {
 
                         // Use executeWithReconnect to handle connection failures automatically
                         List<Tag> tags = managedReader.executeWithReconnect(reader -> {
-                            InventoryParam inventoryParam = new InventoryParam();
-                            inventoryParam.setAntennas(managedReader.getConfig().getAntennaMask());
-
-                            int returnCode = reader.hm().inventory(true, inventoryParam);
+                            int returnCode;
+                            if (isHfReaderConfig(managedReader.getConfig())) {
+                                returnCode = reader.hm().inventory();
+                            } else {
+                                InventoryParam inventoryParam = new InventoryParam();
+                                inventoryParam.setAntennas(managedReader.getConfig().getEffectiveAntennaMask());
+                                returnCode = reader.hm().inventory(true, inventoryParam);
+                            }
                             
                             // "No transponder in reader field" is a normal condition, not an error
                             if (returnCode != ErrorCode.Ok) {
@@ -773,9 +784,14 @@ public class Main {
                                 }
 
                                 String idd = tagItem.iddToHexString();
-                                
-                                // Create Tag instance (uses global password configuration)
-                                Tag tag = TagFactory.createTagFromHexString(idd);
+
+                                Tag tag;
+                                if (isHfReaderConfig(managedReader.getConfig())) {
+                                    tag = readHfTagFromInventory(reader, i, tagItem);
+                                } else {
+                                    // UHF path: existing EPC format detection
+                                    tag = TagFactory.createTagFromHexString(idd);
+                                }
                                 
                                 // Extract and set RSSI values
                                 List<Tag.AntennaRssi> rssiList = new ArrayList<>();
@@ -817,6 +833,10 @@ public class Main {
                         ));
                         return;
                     }
+                    if (isHfReaderConfig(managedReader.getConfig())) {
+                        ctx.status(400).json(unsupportedHfOperation("/secure/{readerName}"));
+                        return;
+                    }
                     if (isNotificationReader(managedReader.getConfig())) {
                         ctx.status(400).json(Map.of(
                             "success", false,
@@ -835,6 +855,10 @@ public class Main {
                             "success", false,
                             "error", "Reader not found: " + ctx.pathParam("readerName")
                         ));
+                        return;
+                    }
+                    if (isHfReaderConfig(managedReader.getConfig())) {
+                        ctx.status(400).json(unsupportedHfOperation("/unsecure/{readerName}"));
                         return;
                     }
                     if (isNotificationReader(managedReader.getConfig())) {
@@ -886,6 +910,10 @@ public class Main {
                             "success", false,
                             "error", "Reader is configured for notification mode; use /notification/... endpoints"
                         ));
+                        return;
+                    }
+                    if (isHfReaderConfig(managedReader.getConfig())) {
+                        ctx.status(400).json(unsupportedHfOperation("/initialize/{readerName}"));
                         return;
                     }
 
@@ -972,6 +1000,10 @@ public class Main {
                         ));
                         return;
                     }
+                    if (isHfReaderConfig(managedReader.getConfig())) {
+                        ctx.status(400).json(unsupportedHfOperation("/edit/{readerName}"));
+                        return;
+                    }
 
                     log.info("Edit requested for reader {} with EPC {} -> mediaId {}", readerName, epcHex, newMediaId);
 
@@ -1048,6 +1080,10 @@ public class Main {
                         ));
                         return;
                     }
+                    if (isHfReaderConfig(managedReader.getConfig())) {
+                        ctx.status(400).json(unsupportedHfOperation("/clear/{readerName}"));
+                        return;
+                    }
 
                     log.info("Clear requested for reader {} and EPC {}", readerName, epcHex);
 
@@ -1105,6 +1141,10 @@ public class Main {
                             "success", false,
                             "error", "Reader is configured for notification mode; use /notification/... endpoints"
                         ));
+                        return;
+                    }
+                    if (isHfReaderConfig(managedReader.getConfig())) {
+                        ctx.status(400).json(unsupportedHfOperation("/analyze/{readerName}"));
                         return;
                     }
 
@@ -1172,6 +1212,11 @@ public class Main {
                 "success", false,
                 "error", "Reader not found: " + readerName
             ));
+            return;
+        }
+
+        if (isHfReaderConfig(managedReader.getConfig())) {
+            ctx.status(400).json(unsupportedHfOperation(secure ? "/secure/{readerName}" : "/unsecure/{readerName}"));
             return;
         }
 
@@ -1264,6 +1309,12 @@ public class Main {
             return;
         }
 
+        if (isHfReaderConfig(managedReader.getConfig())) {
+            ctx.status(400).json(unsupportedHfOperation(
+                secure ? "/notification/secure/{readerName}" : "/notification/unsecure/{readerName}"));
+            return;
+        }
+
         try {
             Tag tag = TagFactory.createTagFromHexString(epcHex);
             if (tag instanceof RawTag) {
@@ -1343,6 +1394,71 @@ public class Main {
             && config.getMode().trim().equalsIgnoreCase("notification");
     }
 
+    private static boolean isHfReaderConfig(ReaderConfig config) {
+        return config != null && config.isHfProtocol();
+    }
+
+    private static Map<String, Object> unsupportedHfOperation(String endpoint) {
+        return Map.of(
+            "success", false,
+            "error", "Endpoint " + endpoint + " is currently unsupported for HF readers",
+            "reason", "HF write/security/analysis operations require AFI and write semantics that are not implemented yet"
+        );
+    }
+
+    private static Tag readHfTagFromInventory(ReaderModule reader, int tagIndex, TagItem tagItem) throws Exception {
+        String idd = tagItem.iddToHexString();
+
+        try (ThBase tagHandler = reader.hm().createTagHandler(tagIndex)) {
+            if (!(tagHandler instanceof ThIso15693 iso15693Tag)) {
+                log.debug("HF inventory fallback for IDD {}: unexpected handler type {}",
+                    idd,
+                    tagHandler == null ? "null" : tagHandler.getClass().getName());
+                return new RawTag(new byte[2], hexToBytes(idd));
+            }
+
+            DataBuffer data = new DataBuffer();
+            LongRef blockSizeRef = new LongRef(0);
+            int readReturnCode = iso15693Tag.readMultipleBlocks(
+                (long) HF_READ_START_BLOCK,
+                (long) HF_READ_BLOCK_COUNT,
+                blockSizeRef,
+                data
+            );
+
+            if (readReturnCode != ErrorCode.Ok) {
+                log.warn("HF inventory read failed for IDD {} (rc={}, isoError={})",
+                    idd, readReturnCode, iso15693Tag.lastIsoError());
+                return new RawTag(new byte[2], hexToBytes(idd));
+            }
+
+            Tag parsed = TagFactory.createHfTagFromIso15693(idd, data.data());
+            log.debug("HF inventory read ok for IDD {} blockSize={} tagType={} mediaId={}",
+                idd,
+                blockSizeRef.getValue(),
+                parsed.getTagType(),
+                parsed.getMediaId());
+            return parsed;
+        }
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        if (hex == null || hex.isBlank()) {
+            return new byte[0];
+        }
+
+        String normalized = hex.toUpperCase(Locale.ROOT).replaceAll("\\s+", "");
+        if (!normalized.matches("^[0-9A-F]+$") || (normalized.length() % 2) != 0) {
+            return normalized.getBytes(StandardCharsets.US_ASCII);
+        }
+
+        byte[] bytes = new byte[normalized.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) Integer.parseInt(normalized.substring(i * 2, i * 2 + 2), 16);
+        }
+        return bytes;
+    }
+
     private static int getRequiredNotificationListenerPort(ReaderConfig config) {
         if (config == null) {
             throw new IllegalArgumentException("Reader configuration is missing");
@@ -1395,6 +1511,9 @@ public class Main {
         payload.put("pc", event.pc);
         payload.put("rssiValues", event.rssiValues);
         payload.put("readerTimestamp", event.readerTimestamp);
+        payload.put("hfBlockSize", event.hfBlockSize);
+        payload.put("hfBlockCount", event.hfBlockCount);
+        payload.put("hfBlocksHex", event.hfBlocksHex);
         payload.put("stable", event.stable);
         payload.put("seenCount", event.seenCount);
         payload.put("presenceDurationMs", event.presenceDurationMs);
