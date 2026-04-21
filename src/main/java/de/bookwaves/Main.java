@@ -1355,7 +1355,7 @@ public class Main {
                 } finally {
                     //System.out.println(antenna);
                     //Thread.sleep(2000); // Small delay to ensure tag is ready before resuming notifications
-                    int rfOnRc = reader.rf().on(antenna, false, false);
+                    int rfOnRc = reader.rf().on(antenna, false, false); // maintainhostmode = false, dcOn = false
                     if (rfOnRc != ErrorCode.Ok) {
                         log.error("Failed to resume notification mode for {} after security update (RF on rc={} status={})",
                             readerName, rfOnRc, reader.lastErrorStatusText());
