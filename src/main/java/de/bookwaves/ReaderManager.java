@@ -88,7 +88,7 @@ public class ReaderManager {
                 
                 if (returnCode != ErrorCode.Ok) {
                     // Reconnect failed, try fresh connection
-                    log.info("Reconnect failed for {} (code {}), attempting fresh TCP connect", config.getName(), returnCode);
+                    log.info("Reader {}: no prior session (reconnect code {}), opening fresh TCP connection", config.getName(), returnCode);
                     Connector connector = Connector.createTcpConnector(config.getAddress(), config.getPort());
                     connector.setTcpConnectTimeout(5000);
                     returnCode = readerModule.connect(connector);
