@@ -1,3 +1,7 @@
+# Needed for the check if the listner ports are open
+# If not set the check is skipped and Channel1.Address must be set manually, even if config sync is enabled
+hostName: "HOST"
+
 # Example RFID Reader Configuration
 # Copy this file to 'config.yaml' and customize for your setup
 
@@ -28,7 +32,7 @@ logLevel: INFO
 # To show only this app logs, set global level high (e.g., WARN) and app package lower (e.g., INFO/DEBUG)
 loggers:
   de.bookwaves: DEBUG
-  # de.bookwaves.ReaderManager: DEBUG
+# de.bookwaves.ReaderManager: DEBUG
 
 # Allow all origins for CORS (defaults to false)
 corsAnyHost: false
@@ -39,9 +43,24 @@ tagFileLoggingEnabled: true
 # Path inside the runtime/container filesystem
 tagFileLoggingPath: /logs/taggingLog.csv
 
+# If true, initial validation of mode is skipped, and full configuration is run.
+# Activate in initial deployment.
+# Default: false
+runFullConfigurationEnabled: true
+
+# If true, configuration is writen to EEPROM
+# Note that if set to false, the original configuration in EEPROM is loaded after the restart of the reader
+# Default: true
+readerConfigurationPersistent: true
+
 # Reader configurations
 # protocol is optional and defaults to `uhf`
 # do not set `antennas` for `hf` readers
+# sort rssiFilters, and outputPowers in way that the values map to the antennas list
+# type: MRU400/GENERIC the default is GENERIC
+# For the MRU400 family, the possible output powers are [0, 0.1, 0.2, ... , 0.9, 1.0]
+# For the MRU400 family, rssiFilter with value 0 deactivates filtering by rssi
+# For the MRU400 family, username and password are mandatory for the configuration sync with the reader
 readers:
   - name: reader1
     address: 192.168.1.100
@@ -49,13 +68,18 @@ readers:
     mode: host
     antennas: [4]
   - name: reader2
-    address: 192.168.1.70
+    type: MRU400
+    address: 192.168.1.101
+    username: SET_IN_SERVER
+    password: SET_IN_SERVER
+    mode: notification
     port: 10001
     listenerPort: 20001
-    mode: notification
     antennas: [1,2]
+    rssiFilters: [60, 65]
+    outputPowers: [0.1, 0.8]
   - name: reader3
-    address: 192.168.1.75
+    address: 192.168.1.102
     port: 10001
     protocol: hf
     listenerPort: 20002

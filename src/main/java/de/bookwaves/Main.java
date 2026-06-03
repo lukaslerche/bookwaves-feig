@@ -53,7 +53,10 @@ public class Main {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final DateTimeFormatter TAG_LOG_TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm:ss");
     private static boolean tagFileLoggingEnabled;
+    private static boolean runFullConfigurationEnabled;
     private static Path tagFileLoggingPath;
+    private static String hostName;
+    private static boolean readerConfigurationPersistent;
 
     public static void main(String[] args) {
         List<ReaderConfig> readers;
@@ -86,7 +89,10 @@ public class Main {
 
         boolean corsAnyHost = ConfigLoader.isCorsAnyHost();
         tagFileLoggingEnabled = ConfigLoader.isTagFileLoggingEnabled();
+        runFullConfigurationEnabled = ConfigLoader.isRunFullConfigurationEnabled();
         tagFileLoggingPath = Path.of(ConfigLoader.getTagFileLoggingPath());
+        hostName = ConfigLoader.getHostName();
+        readerConfigurationPersistent = ConfigLoader.isReaderConfigurationPersistent();
 
         log = LoggerFactory.getLogger(Main.class);
         String effectiveLogLevel = System.getProperty("org.slf4j.simpleLogger.defaultLogLevel", "info");
@@ -121,7 +127,7 @@ public class Main {
             log.info("Loaded tag password configuration with {} entries", tagPasswords.size());
             
             for (ReaderConfig config : readers) {
-                readerManager.registerReader(config);
+                readerManager.registerReader(config, runFullConfigurationEnabled, hostName);
                 log.info("Registered reader: {} (protocol: {}, mode: {}, antennas: {})",
                     config.getName(), config.getProtocol(), config.getMode(), config.getAntennas());
             }

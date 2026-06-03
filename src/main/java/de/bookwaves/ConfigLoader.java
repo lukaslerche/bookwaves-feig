@@ -28,7 +28,10 @@ public class ConfigLoader {
         private Map<String, String> loggers;
         private Boolean corsAnyHost;
         private Boolean tagFileLoggingEnabled;
+        private String hostName;
         private String tagFileLoggingPath;
+        private Boolean runFullConfigurationEnabled;
+        private Boolean readerConfigurationPersistent;
 
         public List<ReaderConfig> getReaders() {
             return readers;
@@ -82,8 +85,16 @@ public class ConfigLoader {
             return tagFileLoggingEnabled != null ? tagFileLoggingEnabled : true;
         }
 
+        public boolean isRunFullConfigurationEnabled() {
+            return runFullConfigurationEnabled != null ? runFullConfigurationEnabled: false;
+        }
+
         public void setTagFileLoggingEnabled(boolean tagFileLoggingEnabled) {
             this.tagFileLoggingEnabled = tagFileLoggingEnabled;
+        }
+
+        public void setRunFullConfigurationEnabled(boolean runFullConfigurationEnabled) {
+            this.runFullConfigurationEnabled = runFullConfigurationEnabled;
         }
 
         public String getTagFileLoggingPath() {
@@ -94,6 +105,22 @@ public class ConfigLoader {
 
         public void setTagFileLoggingPath(String tagFileLoggingPath) {
             this.tagFileLoggingPath = tagFileLoggingPath;
+        }
+
+        public String getHostName() {
+            return (hostName != null && !hostName.isBlank()) ? hostName : null;
+        }
+
+        public void setHostName(String hostName) {
+            this.hostName = hostName;
+        }
+
+        public boolean isReaderConfigurationPersistent() {
+            return readerConfigurationPersistent != null && readerConfigurationPersistent;
+        }
+
+        public void setReaderConfigurationPersistent(boolean readerConfigurationPersistent) {
+            this.readerConfigurationPersistent = readerConfigurationPersistent;
         }
     }
 
@@ -133,6 +160,28 @@ public class ConfigLoader {
         }
     }
 
+    private static ReaderConfig promoteReaderConfig(ReaderConfig base) {
+        log().info("Promoting reader {} with type {}", base.getName(), base.getType());
+
+        if (base.getType() == ReaderConfig.ReaderType.MRU400) {
+            MRU400ReaderConfig mru = new MRU400ReaderConfig();
+            mru.setName(base.getName());
+            mru.setAddress(base.getAddress());
+            mru.setPort(base.getPort());
+            mru.setListenerPort(base.getListenerPort());
+            mru.setMode(base.getMode());
+            mru.setAntennas(base.getAntennas());
+            mru.setRssiFilters(base.getRssiFilters());
+            mru.setOutputPowers(base.getOutputPowers());
+            mru.setUsername(base.getUsername());
+            mru.setPassword(base.getPassword());
+            mru.setConfigurationPersistent(isReaderConfigurationPersistent());
+            mru.setHostName(getHostName());
+            return mru;
+        }
+        return base;
+    }
+
     public static List<ReaderConfig> loadReaders() throws Exception {
         Configuration configuration = loadConfiguration();
 
@@ -141,11 +190,15 @@ public class ConfigLoader {
             throw new Exception("No readers found in configuration file");
         }
 
-        validateReaderConfigurations(configuration.getReaders());
+        List<ReaderConfig> readers = configuration.getReaders().stream()
+        .map(ConfigLoader::promoteReaderConfig)
+        .toList();
+
+        validateReaderConfigurations(readers);
 
         log().info("Loaded configuration with {} readers and {} tag password entries",
-            configuration.getReaders().size(), configuration.getTagPasswords().size());
-        return configuration.getReaders();
+            readers.size(), configuration.getTagPasswords().size());
+        return readers;
     }
 
     private static void validateReaderConfigurations(List<ReaderConfig> readers) throws Exception {
@@ -162,6 +215,19 @@ public class ConfigLoader {
                     "Invalid reader configuration for " + readerName +
                     ": antennas must not be configured when protocol is hf"
                 );
+            }
+
+            if (reader instanceof MRU400ReaderConfig mru) {
+                List<Integer> rssiFilters = mru.getRssiFilters();
+                List<Integer> antennas    = mru.getAntennas();
+
+                if (!rssiFilters.isEmpty() && rssiFilters.size() != antennas.size()) {
+                    throw new Exception(
+                        "Invalid reader configuration for '" + mru.getName() +
+                        "': rssiFilters length (" + rssiFilters.size() +
+                        ") must match antennas length (" + antennas.size() + ")"
+                    );
+                }
             }
         }
     }
@@ -234,6 +300,28 @@ public class ConfigLoader {
     }
 
     /**
+     * Whether full configuration of all readers is perfomed.
+     * Defaults to true when not specified.
+     */
+    public static boolean isRunFullConfigurationEnabled() {
+        if (globalConfig == null) {
+            return false;
+        }
+        return globalConfig.isRunFullConfigurationEnabled();
+    }
+
+    /**
+     * Whether full configuration of all readers is perfomed.
+     * Defaults to true when not specified.
+     */
+    public static boolean isReaderConfigurationPersistent() {
+        if (globalConfig == null) {
+            return false;
+        }
+        return globalConfig.isReaderConfigurationPersistent();
+    }
+
+    /**
      * Path to CSV file used for tag initialization logging.
      * Defaults to /logs/taggingLog.csv when not specified.
      */
@@ -242,5 +330,16 @@ public class ConfigLoader {
             return "/logs/taggingLog.csv";
         }
         return globalConfig.getTagFileLoggingPath();
+    }
+
+    /**
+     * Host name of the machine.
+     * Defaults to /logs/taggingLog.csv when not specified.
+     */
+    public static String getHostName() {
+        if (globalConfig == null) {
+            return null;
+        }
+        return globalConfig.getHostName();
     }
 }
