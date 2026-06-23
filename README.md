@@ -541,28 +541,15 @@ Ensure `LD_LIBRARY_PATH` points to correct native libraries:
 
 The following sections are for developers who want to build, modify, or contribute to the project.
 
-### Running Locally
+### Requirements
 
-**Prerequisites:**
 - Java 21 or newer
 - Maven
 - Feig SDK files (see Devcontainer Prerequisites below)
 
-Set the environment variables and run the application:
+### FEIG SDK Setup
 
-```bash
-export CONFIG_FILE_PATH=$(pwd)/config.yaml
-export LD_LIBRARY_PATH=$(pwd)/native/linux.x64
-java -cp "target/classes:target/dependency/*:libs/*" de.bookwaves.Main
-```
-
-Or use the provided VS Code launch configuration (already configured).
-
-### Developing with Devcontainer
-
-#### Prerequisites
-
-Before using the devcontainer, you must obtain the Feig SDK files:
+Before running the application, you must obtain the Feig SDK files.
 
 1. **Download the Feig SDK** from the official Feig Electronic website:
    - Navigate to the SDK download section for Java
@@ -570,14 +557,14 @@ Before using the devcontainer, you must obtain the Feig SDK files:
    - Note: Current version used is: `FEIG.ID.SDK.Gen3.Java-v7.0.0`
 
 2. **Extract required files** to the project directories:
-   
+
    **JAR files** (`libs/` directory):
    ```
    libs/fedm-funit-java-api-1.1.0.jar
    libs/fedm-java-api-7.0.0.jar
    libs/fedm-service-java-api-11.1.2.jar
    ```
-   
+
    **Native libraries** (`native/linux.x64/` directory):
    ```
    native/linux.x64/install.sh
@@ -595,15 +582,17 @@ Before using the devcontainer, you must obtain the Feig SDK files:
    ```
 
 3. **Create symbolic links** by running the provided install script:
+
    ```bash
    cd native/linux.x64
    chmod +x install.sh
    ./install.sh
    ```
-   
-   This will create the required `.so` and `.so.X` symbolic links pointing to the versioned files.
+
+   This creates the required `.so` and `.so.X` symbolic links pointing to the versioned files.
 
 4. **Verify directory structure** after running install.sh:
+
    ```
    .
    ├── libs/
@@ -625,7 +614,50 @@ Before using the devcontainer, you must obtain the Feig SDK files:
 
 **Note:** These files are proprietary and cannot be included in the repository. You must obtain them directly from Feig Electronic.
 
-#### Starting the Devcontainer
+### Configuration
+
+Create your local configuration:
+
+```bash
+cp config.example.yaml config.yaml
+# Edit config.yaml with your reader settings
+```
+
+### Running the Application
+
+Use the provided helper script:
+
+```bash
+./run.sh
+```
+
+The script automatically:
+
+- Compiles the project
+- Copies Maven runtime dependencies into `target/dependency`
+- Sets the required runtime environment variables
+- Starts `de.bookwaves.Main`
+
+### Manual Execution (Optional)
+
+For debugging or custom workflows, you can also run the application manually:
+
+```bash
+mvn compile dependency:copy-dependencies
+
+export CONFIG_FILE_PATH=$(pwd)/config.yaml
+export LD_LIBRARY_PATH=$(pwd)/native/linux.x64
+
+java -cp "target/classes:target/dependency/*:libs/*" de.bookwaves.Main
+```
+
+You can also use the provided VS Code launch configuration.
+
+### Developing with Devcontainer
+
+The devcontainer provides a preconfigured Java and Maven development environment.
+
+#### Usage
 
 1. **Open in VS Code** with the Dev Containers extension installed
 
@@ -633,23 +665,22 @@ Before using the devcontainer, you must obtain the Feig SDK files:
    - Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
    - Select: "Dev Containers: Reopen in Container"
 
-3. **Build the project** (done automatically, or manually):
-   ```bash
-   mvn clean compile dependency:copy-dependencies
-   ```
+3. **Ensure the FEIG SDK files are available** as described in the FEIG SDK Setup section above.
 
-4. **Create your configuration**:
+4. **Create your configuration** if you have not already:
+
    ```bash
    cp config.example.yaml config.yaml
    # Edit config.yaml with your reader settings
    ```
 
-5. **Run the application** using VS Code launch configuration or:
+5. **Run the application**:
+
    ```bash
-   export CONFIG_FILE_PATH=$(pwd)/config.yaml
-   export LD_LIBRARY_PATH=$(pwd)/native/linux.x64
-   java -cp "target/classes:target/dependency/*:libs/*" de.bookwaves.Main
+   ./run.sh
    ```
+
+   You can also use the provided VS Code launch configuration.
 
 ### Building the Docker Image
 
@@ -702,4 +733,3 @@ docker buildx build --platform linux/amd64 --tag ghcr.io/lukaslerche/bookwaves-f
 
 - `CONFIG_FILE_PATH` - Path to configuration file (optional in Docker, defaults to `/app/config/config.yaml`)
 - `LD_LIBRARY_PATH` - Path to native libraries (set automatically in Dockerfile)
-
