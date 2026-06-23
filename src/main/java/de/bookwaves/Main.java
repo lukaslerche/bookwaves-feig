@@ -1252,7 +1252,7 @@ public class Main {
             ctx.json(Map.of(
                 "success", true,
                 "message", "Tag " + (secure ? "secured" : "unsecured") + " successfully",
-                "epc", epcHex,
+                "epc", tag.getEpcHexString(),
                 "tagType", tag.getTagType(),
                 "secured", secure
             ));
@@ -1370,7 +1370,7 @@ public class Main {
             ctx.json(Map.of(
                 "success", true,
                 "message", "Tag " + (secure ? "secured" : "unsecured") + " successfully in notification mode",
-                "epc", normalizedEpc,
+                "epc", tag.getEpcHexString(),
                 "tagType", tag.getTagType(),
                 "secured", secure
             ));
