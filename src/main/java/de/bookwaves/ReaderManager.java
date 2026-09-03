@@ -1,19 +1,21 @@
 package de.bookwaves;
 
-import de.bookwaves.ReaderConfig.ConfigurationState;
-import de.bookwaves.ReaderConfig.ReaderType;
+import de.bookwaves.sync.ConfigurationSync;
+import de.bookwaves.sync.FeigReaderConfigPort;
+import de.bookwaves.sync.ReaderProfile;
+import de.bookwaves.sync.SyncReport;
 
 import de.feig.fedm.Connector;
 import de.feig.fedm.ErrorCode;
 import de.feig.fedm.ListenerParam;
 import de.feig.fedm.ReaderModule;
 import de.feig.fedm.RequestMode;
-import de.feig.fedm.Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -66,24 +68,19 @@ public class ReaderManager {
     }
 
     /**
-     * Exception thrown when a fatal misconfiguration exists.
+     * How a reader's live configuration stands against its YAML configuration.
      */
-    public static class MisconfigurationException extends Exception {
-        private final int errorCode;
-        
-        public MisconfigurationException(String message, int errorCode) {
-            super(message);
-            this.errorCode = errorCode;
-        }
-        
-        public MisconfigurationException(String message) {
-            super(message);
-            this.errorCode = -1;
-        }
-        
-        public int getErrorCode() {
-            return errorCode;
-        }
+    public enum SyncState {
+        /** The reader's configuration is not managed by this service. */
+        UNMANAGED,
+        /** The reader has not been reachable since startup, so nothing is known. */
+        NEVER_CHECKED,
+        /** The reader could not be contacted. */
+        UNREACHABLE,
+        /** The reader matches its configuration. */
+        IN_SYNC,
+        /** The reader differs from its configuration and could not be repaired. */
+        DRIFTED
     }
 
     public static class ManagedReader {
@@ -94,47 +91,35 @@ public class ReaderManager {
         private final Lock lock = new ReentrantLock(true);
         private volatile String lastConnectionStatus = "not_initialized";
         private volatile String lastConnectionError = null;
+        private volatile SyncState syncState = SyncState.NEVER_CHECKED;
+        private volatile String syncDetail = null;
 
         public ManagedReader(ReaderConfig config) {
             this.config = config;
+            if (!config.isManaged()) {
+                this.syncState = SyncState.UNMANAGED;
+            }
         }
 
         public synchronized ReaderModule getModule() throws Exception {
-            log.info("with lastConnectionStatus {}, and the reader module in {}", lastConnectionStatus, readerModule);
             if (readerModule == null) {
                 readerModule = new ReaderModule(RequestMode.UniDirectional);
-                log.info("Created ReaderModule for {} in UniDirectional mode", config.getName());
+                log.debug("Created ReaderModule for {} in UniDirectional mode", config.getName());
                 lastConnectionStatus = "disconnected";
             }
 
             if (!readerModule.isConnected()) {
-
-                int returnCode = ErrorCode.Ok;
-                log.info("Attempting fresh TCP connect to {}", config.getName());
-
-                if (!config.hasCredentials()) {
-                    Connector connector = Connector.createTcpConnector(config.getAddress(), config.getPort());
-                    connector.setTcpConnectTimeout(5000);
-                    log.info("Using unauthenticated connection for reader {}", config.getName());
-                    returnCode = readerModule.connect(connector);
-                } else {
-                    Connector connector = Connector.createTcpConnector(config.getAddress(), config.getPort());
-                    connector.setTcpConnectTimeout(5000);
-                    String username = config.getUsername();
-                    String password = config.getPassword();
-                    connector.setAuthentication(username, password);
-                    log.info("Using authenticated connection for reader {}", config.getName());
-                    returnCode = readerModule.connect(connector);
-                }
+                log.debug("Attempting fresh TCP connect to {}", config.getName());
+                int returnCode = readerModule.connect(createConnector());
 
                 if (returnCode != ErrorCode.Ok) {
                     lastConnectionStatus = "error";
                     lastConnectionError = readerModule.lastErrorStatusText();
-                    throw new Exception("Failed to connect to reader " + config.getName() + ": " + 
-                                      readerModule.lastErrorStatusText() + " (code: " + returnCode + ")");                                    
+                    throw new Exception("Failed to connect to reader " + config.getName() + ": " +
+                                      readerModule.lastErrorStatusText() + " (code: " + returnCode + ")");
                 }
 
-                log.info("Connected to reader {}", config.getName());
+                log.debug("Connected to reader {}", config.getName());
                 lastConnectionStatus = "connected";
                 lastConnectionError = null;
             } else {
@@ -142,6 +127,20 @@ public class ReaderManager {
             }
 
             return readerModule;
+        }
+
+        /**
+         * Builds the connector for this reader. One place, so a reconnect uses the same
+         * credentials as the initial connect.
+         */
+        private Connector createConnector() {
+            Connector connector = Connector.createTcpConnector(config.getAddress(), config.getPort());
+            connector.setTcpConnectTimeout(5000);
+            if (config.hasCredentials()) {
+                connector.setAuthentication(config.getUsername(), config.getPassword());
+                log.debug("Using authenticated connection for reader {}", config.getName());
+            }
+            return connector;
         }
 
         /**
@@ -187,16 +186,13 @@ public class ReaderManager {
             }
             
             // Create fresh ReaderModule instance
-            log.info("Creating new ReaderModule instance for {}", config.getName());
+            log.debug("Creating new ReaderModule instance for {}", config.getName());
             readerModule = new ReaderModule(RequestMode.UniDirectional);
-                log.info("New ReaderModule created after forced disconnect for {}", config.getName());
-            
-            // Establish fresh connection
-            log.info("Attempting fresh connection to {}", config.getName());
-            Connector connector = Connector.createTcpConnector(config.getAddress(), config.getPort());
-            connector.setTcpConnectTimeout(5000);
-            int returnCode = readerModule.connect(connector);
-            
+
+            // Establish fresh connection, with the same credentials as the initial connect
+            log.debug("Attempting fresh connection to {}", config.getName());
+            int returnCode = readerModule.connect(createConnector());
+
             if (returnCode != ErrorCode.Ok) {
                 String errorMsg = readerModule.lastErrorStatusText();
                 readerModule.close();
@@ -206,6 +202,67 @@ public class ReaderManager {
             }
             
             log.info("Successfully reconnected to {}", config.getName());
+        }
+
+        /**
+         * Brings the reader's configuration in line with {@code config.yaml}. Only
+         * parameters that differ are written.
+         *
+         * @param force write every parameter whether or not it differs
+         * @throws Exception if the reader cannot be reached or a parameter cannot be written
+         */
+        public synchronized SyncReport syncConfiguration(boolean force) throws Exception {
+            Optional<ReaderProfile> profile = config.getProfile();
+            if (profile.isEmpty()) {
+                syncState = SyncState.UNMANAGED;
+                log.debug("Reader {} is not configuration managed, nothing to synchronise", config.getName());
+                return new SyncReport(config.getName(), java.util.List.of(), java.util.List.of());
+            }
+
+            if (!config.isNotificationMode()) {
+                log.warn("Reader {} runs in host mode, where configuration sync covers only "
+                    + "the operating mode and antenna settings; the remaining host mode "
+                    + "settings from the README must still be set by hand", config.getName());
+            }
+
+            ReaderModule module;
+            try {
+                module = getModule();
+            } catch (Exception e) {
+                syncState = SyncState.UNREACHABLE;
+                syncDetail = e.getMessage();
+                throw e;
+            }
+
+            ConfigurationSync sync = new ConfigurationSync(
+                profile.get(),
+                ConfigLoader.getHostName(),
+                ConfigLoader.isReaderConfigurationPersistent());
+
+            try {
+                SyncReport report = sync.apply(
+                    new FeigReaderConfigPort(module, config.getName()), config, force);
+                syncState = SyncState.IN_SYNC;
+                syncDetail = report.written().isEmpty()
+                    ? "configuration matches"
+                    : "repaired " + report.written().size() + " parameter(s)";
+                log.info("{}", report.summary());
+                return report;
+            } catch (ReaderOperationException e) {
+                syncState = SyncState.DRIFTED;
+                syncDetail = e.getMessage();
+                throw e;
+            }
+        }
+
+        /** How this reader's configuration stands against {@code config.yaml}. */
+        public SyncState getSyncState() {
+            return syncState;
+        }
+
+        /** Why the reader is in its current sync state, or null when never checked. */
+        public String getSyncDetail() {
+            return syncDetail;
         }
 
         /**
@@ -302,7 +359,7 @@ public class ReaderManager {
 
         public synchronized boolean startNotificationMode(int port) throws Exception {
             if (notificationListener != null) {
-                log.info("Notification already active for {} on port {}", config.getName(), listenerPort);
+                log.debug("Notification already active for {} on port {}", config.getName(), listenerPort);
                 return false; // Already running
             }
 
@@ -311,6 +368,10 @@ public class ReaderManager {
 
                 // Ensure reader is initialized and currently connected
                 getModule();
+
+                // Nothing else calls a notification reader, so this is where it gets
+                // synchronised if it was unreachable at startup.
+                syncConfiguration(false);
 
                 notificationListener = new NotificationListener(
                     readerModule,
@@ -335,7 +396,12 @@ public class ReaderManager {
                 );
                 
                 if (state != ErrorCode.Ok) {
-                    log.error("Failed to start listener thread: {}", readerModule.lastErrorStatusText());
+                    // A failure here means something else holds the port, or this process
+                    // may not bind it.
+                    log.error("Reader {}: could not bind notification listener port {} - {}. "
+                        + "Free the port, or check that another instance of this service is "
+                        + "not already running.",
+                        config.getName(), port, readerModule.lastErrorStatusText());
                     readerModule.async().stopNotification();
                     notificationListener.close();
                     notificationListener = null;
@@ -352,7 +418,7 @@ public class ReaderManager {
 
         public synchronized boolean stopNotificationMode() {
             if (notificationListener == null) {
-                log.info("Notification stop requested but none active for {}", config.getName());
+                log.debug("Notification stop requested but none active for {}", config.getName());
                 return false; // Not running
             }
 
@@ -425,50 +491,46 @@ public class ReaderManager {
         }
     }
 
-    public void registerReader(ReaderConfig config, Boolean runFullConfigurationEnabled, String hostName) throws Exception, MisconfigurationException {
-        if (config.isHfProtocol() && config.getAntennas() != null && !config.getAntennas().isEmpty()) {
-            throw new IllegalArgumentException(
-                "Reader " + config.getName() + " uses protocol hf and must not define antennas"
-            );
-        }
+    /**
+     * Registers a reader and, if it can be reached, synchronises its configuration.
+     *
+     * <p>An unreachable reader is still registered, recorded as
+     * {@link SyncState#UNREACHABLE} and synchronised on the next connection, so one
+     * dark reader does not stop the service.
+     */
+    public void registerReader(ReaderConfig config) {
+        ManagedReader managed = new ManagedReader(config);
+        readers.put(config.getName(), managed);
 
         if (config.isHfProtocol()) {
             log.info("HF reader {} registered without configured antennas", config.getName());
         }
 
-        ManagedReader managed = new ManagedReader(config);
-        
-        if (config.getMode().equals("notification")) {
-            boolean listenerPortOpen = config.isListenerPortOpen(hostName);
-            if (!listenerPortOpen) {
-                throw new MisconfigurationException(
-                    "Open port " + config.getListenerPort() + " to correctly use reader " + config.getName() + " in notification mode."
-                );
-            }
+        try {
+            managed.syncConfiguration(false);
+        } catch (Exception e) {
+            log.warn("Reader {} could not be synchronised at startup ({}); "
+                + "it stays registered and is retried on the next connection",
+                config.getName(), e.getMessage());
+        } finally {
+            // Host mode readers reconnect lazily on first use; notification readers
+            // reconnect when their listener starts.
+            managed.disconnect();
         }
+    }
 
-        // Connect to the reader — throws if unreachable
-        ReaderModule readerModule = managed.getModule();
-        ConfigurationState configState = ConfigurationState.MISCONFIGURED;
-        
-        if (config.getType() == ReaderType.GENERIC || !runFullConfigurationEnabled) {
-            configState = config.checkConfig(readerModule);
+    /**
+     * Resynchronises a registered reader on demand.
+     *
+     * @param force rewrite every parameter, whether or not it differs
+     * @throws IllegalArgumentException if no reader of that name is registered
+     */
+    public SyncReport syncReader(String name, boolean force) throws Exception {
+        ManagedReader managed = readers.get(name);
+        if (managed == null) {
+            throw new IllegalArgumentException("No reader registered with name " + name);
         }
-
-        if (configState == ConfigurationState.MISCONFIGURED) {
-            // Push YAML config to the physical reader
-            log.info("Reader {} misconfigured, pushing YAML config to the reader...", config.getName());
-            int applyingState = config.applyConfig(readerModule);
-            if (applyingState != ErrorCode.Ok) {
-                managed.close();
-                throw new ReaderOperationException(
-                    "Failed to apply configuration to reader '" + config.getName() +
-                    "' (error code: " + applyingState + ")"
-                );
-            }
-        }
-        readerModule.disconnect();
-        readers.put(config.getName(), new ManagedReader(config));
+        return managed.syncConfiguration(force);
     }
 
     public ManagedReader getReader(String name) {

@@ -1,5 +1,9 @@
 package de.bookwaves;
 
+import de.bookwaves.sync.OutputPowerCodec;
+import de.bookwaves.sync.ReaderMode;
+import de.bookwaves.sync.ReaderProfile;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
@@ -9,8 +13,11 @@ import org.yaml.snakeyaml.LoaderOptions;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Utility class to load reader configurations from a YAML file.
@@ -19,7 +26,10 @@ public class ConfigLoader {
     private static Logger log() {
         return LoggerFactory.getLogger(ConfigLoader.class);
     }
-    
+
+    /** The highest antenna port the UHF readers expose. */
+    private static final int MAX_ANTENNA = 4;
+
     public static class Configuration {
         private List<ReaderConfig> readers;
         private Map<String, String> tagPasswords;
@@ -30,7 +40,6 @@ public class ConfigLoader {
         private Boolean tagFileLoggingEnabled;
         private String hostName;
         private String tagFileLoggingPath;
-        private Boolean runFullConfigurationEnabled;
         private Boolean readerConfigurationPersistent;
 
         public List<ReaderConfig> getReaders() {
@@ -85,16 +94,8 @@ public class ConfigLoader {
             return tagFileLoggingEnabled != null ? tagFileLoggingEnabled : true;
         }
 
-        public boolean isRunFullConfigurationEnabled() {
-            return runFullConfigurationEnabled != null ? runFullConfigurationEnabled: false;
-        }
-
         public void setTagFileLoggingEnabled(boolean tagFileLoggingEnabled) {
             this.tagFileLoggingEnabled = tagFileLoggingEnabled;
-        }
-
-        public void setRunFullConfigurationEnabled(boolean runFullConfigurationEnabled) {
-            this.runFullConfigurationEnabled = runFullConfigurationEnabled;
         }
 
         public String getTagFileLoggingPath() {
@@ -116,7 +117,7 @@ public class ConfigLoader {
         }
 
         public boolean isReaderConfigurationPersistent() {
-            return readerConfigurationPersistent != null && readerConfigurationPersistent;
+            return readerConfigurationPersistent == null || readerConfigurationPersistent;
         }
 
         public void setReaderConfigurationPersistent(boolean readerConfigurationPersistent) {
@@ -131,55 +132,36 @@ public class ConfigLoader {
             return globalConfig;
         }
 
-        LoaderOptions loaderOptions = new LoaderOptions();
-        Constructor constructor = new Constructor(Configuration.class, loaderOptions);
-        Yaml yaml = new Yaml(constructor);
-        
         // Require external file path from environment variable
         String externalConfigPath = System.getenv("CONFIG_FILE_PATH");
         if (externalConfigPath == null || externalConfigPath.isEmpty()) {
             throw new Exception("CONFIG_FILE_PATH environment variable is not set. " +
                 "Please provide configuration file path via -e CONFIG_FILE_PATH=<path> or volume mount.");
         }
-        
+
         InputStream inputStream = null;
         try {
             inputStream = new FileInputStream(externalConfigPath);
         } catch (Exception e) {
             throw new Exception("Failed to load configuration file from " + externalConfigPath + ": " + e.getMessage());
         }
-        
+
         try (InputStream stream = inputStream) {
-            globalConfig = yaml.load(stream);
-
-            if (globalConfig == null) {
-                throw new Exception("Configuration file is empty or invalid YAML");
-            }
-
+            globalConfig = parse(stream);
             return globalConfig;
         }
     }
 
-    private static ReaderConfig promoteReaderConfig(ReaderConfig base) {
-        log().info("Promoting reader {} with type {}", base.getName(), base.getType());
+    /** Maps YAML onto {@link Configuration}. Package-private so the mapping can be tested. */
+    static Configuration parse(InputStream stream) throws Exception {
+        LoaderOptions loaderOptions = new LoaderOptions();
+        Constructor constructor = new Constructor(Configuration.class, loaderOptions);
+        Configuration parsed = new Yaml(constructor).load(stream);
 
-        if (base.getType() == ReaderConfig.ReaderType.MRU400) {
-            MRU400ReaderConfig mru = new MRU400ReaderConfig();
-            mru.setName(base.getName());
-            mru.setAddress(base.getAddress());
-            mru.setPort(base.getPort());
-            mru.setListenerPort(base.getListenerPort());
-            mru.setMode(base.getMode());
-            mru.setAntennas(base.getAntennas());
-            mru.setRssiFilters(base.getRssiFilters());
-            mru.setOutputPowers(base.getOutputPowers());
-            mru.setUsername(base.getUsername());
-            mru.setPassword(base.getPassword());
-            mru.setConfigurationPersistent(isReaderConfigurationPersistent());
-            mru.setHostName(getHostName());
-            return mru;
+        if (parsed == null) {
+            throw new Exception("Configuration file is empty or invalid YAML");
         }
-        return base;
+        return parsed;
     }
 
     public static List<ReaderConfig> loadReaders() throws Exception {
@@ -190,10 +172,7 @@ public class ConfigLoader {
             throw new Exception("No readers found in configuration file");
         }
 
-        List<ReaderConfig> readers = configuration.getReaders().stream()
-        .map(ConfigLoader::promoteReaderConfig)
-        .toList();
-
+        List<ReaderConfig> readers = configuration.getReaders();
         validateReaderConfigurations(readers);
 
         log().info("Loaded configuration with {} readers and {} tag password entries",
@@ -201,34 +180,118 @@ public class ConfigLoader {
         return readers;
     }
 
-    private static void validateReaderConfigurations(List<ReaderConfig> readers) throws Exception {
+    /**
+     * Rejects configurations that cannot be synchronised, before any reader is contacted,
+     * so a bad file fails at load rather than partway through writing to a reader.
+     */
+    static void validateReaderConfigurations(List<ReaderConfig> readers) throws Exception {
+        Set<String> seenNames = new HashSet<>();
+
         for (ReaderConfig reader : readers) {
             if (reader == null) {
                 throw new Exception("Reader configuration entry must not be null");
             }
 
-            if (reader.isHfProtocol() && reader.getAntennas() != null && !reader.getAntennas().isEmpty()) {
-                String readerName = reader.getName() == null || reader.getName().isBlank()
-                    ? "<unnamed>"
-                    : reader.getName();
-                throw new Exception(
-                    "Invalid reader configuration for " + readerName +
-                    ": antennas must not be configured when protocol is hf"
-                );
+            String name = (reader.getName() == null || reader.getName().isBlank())
+                ? "<unnamed>"
+                : reader.getName();
+
+            if ("<unnamed>".equals(name)) {
+                throw new Exception("Invalid reader configuration: every reader must have a name");
+            }
+            if (!seenNames.add(name)) {
+                // Readers are held in a map keyed by name; a duplicate would replace the
+                // earlier reader rather than being reported.
+                throw new Exception("Invalid reader configuration: duplicate reader name '" + name + "'");
             }
 
-            if (reader instanceof MRU400ReaderConfig mru) {
-                List<Integer> rssiFilters = mru.getRssiFilters();
-                List<Integer> antennas    = mru.getAntennas();
+            validateReader(reader, name);
+        }
+    }
 
-                if (!rssiFilters.isEmpty() && rssiFilters.size() != antennas.size()) {
-                    throw new Exception(
-                        "Invalid reader configuration for '" + mru.getName() +
-                        "': rssiFilters length (" + rssiFilters.size() +
-                        ") must match antennas length (" + antennas.size() + ")"
-                    );
-                }
+    private static void validateReader(ReaderConfig reader, String name) throws Exception {
+        ReaderMode mode;
+        try {
+            mode = ReaderMode.parse(reader.getMode());
+        } catch (IllegalArgumentException e) {
+            throw new Exception("Invalid reader configuration for '" + name + "': " + e.getMessage());
+        }
+
+        Optional<ReaderProfile> profile;
+        try {
+            profile = reader.getProfile();
+        } catch (IllegalArgumentException e) {
+            throw new Exception("Invalid reader configuration for '" + name + "': " + e.getMessage());
+        }
+
+        if (mode == ReaderMode.NOTIFICATION && reader.getListenerPort() == null) {
+            throw new Exception("Invalid reader configuration for '" + name
+                + "': listenerPort is required in notification mode");
+        }
+
+        if (reader.isHfProtocol() && !reader.getAntennas().isEmpty()) {
+            throw new Exception("Invalid reader configuration for '" + name
+                + "': antennas must not be configured when protocol is hf");
+        }
+
+        if (profile.isEmpty()) {
+            return;
+        }
+
+        if (reader.isHfProtocol()) {
+            throw new Exception("Invalid reader configuration for '" + name
+                + "': configuration sync is only available for uhf readers");
+        }
+
+        validateManagedReader(reader, name, profile.get());
+    }
+
+    /** Checks the settings that only matter when this service synchronises the reader. */
+    private static void validateManagedReader(ReaderConfig reader, String name, ReaderProfile profile)
+            throws Exception {
+        List<Integer> antennas = reader.getAntennas();
+        List<Integer> rssiFilters = reader.getRssiFilters();
+        List<Double> outputPowers = reader.getOutputPowers();
+
+        if (antennas.isEmpty()) {
+            throw new Exception("Invalid reader configuration for '" + name
+                + "': at least one antenna must be configured for type " + profile.id());
+        }
+
+        for (Integer antenna : antennas) {
+            if (antenna == null || antenna < 1 || antenna > MAX_ANTENNA) {
+                throw new Exception("Invalid reader configuration for '" + name
+                    + "': antenna " + antenna + " is out of range 1.." + MAX_ANTENNA);
             }
+        }
+
+        requireMatchingLength(name, "rssiFilters", rssiFilters.size(), antennas.size());
+        requireMatchingLength(name, "outputPowers", outputPowers.size(), antennas.size());
+
+        for (Double power : outputPowers) {
+            if (power == null || !OutputPowerCodec.isSupported(power)) {
+                throw new Exception("Invalid reader configuration for '" + name
+                    + "': output power " + power + " is not supported; supported values are "
+                    + OutputPowerCodec.supportedValues());
+            }
+        }
+
+        if (profile.supportsAuthentication() && !reader.hasCredentials()) {
+            log().warn("Reader {} is type {} but has no username and password; "
+                + "configuration sync will fail if the reader is password protected",
+                name, profile.id());
+        }
+        if (!profile.supportsAuthentication() && reader.hasCredentials()) {
+            log().warn("Reader {} is type {}, which has no user login; "
+                + "the configured username and password are ignored", name, profile.id());
+        }
+    }
+
+    private static void requireMatchingLength(String name, String key, int actual, int expected)
+            throws Exception {
+        if (actual != expected) {
+            throw new Exception("Invalid reader configuration for '" + name + "': " + key
+                + " length (" + actual + ") must match antennas length (" + expected + ")");
         }
     }
 
@@ -300,23 +363,13 @@ public class ConfigLoader {
     }
 
     /**
-     * Whether full configuration of all readers is perfomed.
-     * Defaults to true when not specified.
-     */
-    public static boolean isRunFullConfigurationEnabled() {
-        if (globalConfig == null) {
-            return false;
-        }
-        return globalConfig.isRunFullConfigurationEnabled();
-    }
-
-    /**
-     * Whether full configuration of all readers is perfomed.
+     * Whether configuration written to a reader is stored in its EEPROM, and so
+     * survives a power cycle.
      * Defaults to true when not specified.
      */
     public static boolean isReaderConfigurationPersistent() {
         if (globalConfig == null) {
-            return false;
+            return true;
         }
         return globalConfig.isReaderConfigurationPersistent();
     }
@@ -333,8 +386,9 @@ public class ConfigLoader {
     }
 
     /**
-     * Host name of the machine.
-     * Defaults to /logs/taggingLog.csv when not specified.
+     * Address readers dial back to in notification mode.
+     * Returns null when not configured, in which case the reader's notification
+     * target address has to be set on the reader by hand.
      */
     public static String getHostName() {
         if (globalConfig == null) {

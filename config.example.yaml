@@ -1,9 +1,11 @@
-# Needed for the check if the listner ports are open
-# If not set the check is skipped and Channel1.Address must be set manually, even if config sync is enabled
-hostName: "HOST"
-
 # Example RFID Reader Configuration
 # Copy this file to 'config.yaml' and customize for your setup
+
+# Address readers dial back to in notification mode.
+# This service writes it to each synchronised notification reader, so the reader
+# knows where to send tag reads. If it is left unset, the reader's notification
+# target address has to be set on the reader by hand.
+hostName: "HOST"
 
 # Global tag password configuration
 # IMPORTANT: Configure these passwords before production use!
@@ -43,24 +45,32 @@ tagFileLoggingEnabled: true
 # Path inside the runtime/container filesystem
 tagFileLoggingPath: /logs/taggingLog.csv
 
-# If true, initial validation of mode is skipped, and full configuration is run.
-# Activate in initial deployment.
-# Default: false
-runFullConfigurationEnabled: true
-
-# If true, configuration is writen to EEPROM
-# Note that if set to false, the original configuration in EEPROM is loaded after the restart of the reader
+# If true, configuration written to a reader is stored in its EEPROM and survives a
+# power cycle. If false, the reader reverts to its stored configuration on restart
+# and this service reconfigures it on the next connection.
 # Default: true
 readerConfigurationPersistent: true
 
 # Reader configurations
-# protocol is optional and defaults to `uhf`
+#
+# type: GENERIC (default), NewGen or OldGen
+#   GENERIC  this service does not manage the reader's configuration
+#   NewGen   current UHF generation (e.g. MRU400X); supports username/password
+#   OldGen   older UHF generation (e.g. MRU102); no login, no persistence reset
+#
+# For NewGen and OldGen readers the configuration in this file is the single source
+# of truth: on connect the reader is compared against it and any parameter that has
+# drifted is rewritten. To force a full rewrite, call
+#   POST /readers/{name}/sync?force=true
+#
+# protocol is optional and defaults to `uhf`; configuration sync is uhf only
 # do not set `antennas` for `hf` readers
-# sort rssiFilters, and outputPowers in way that the values map to the antennas list
-# type: MRU400/GENERIC the default is GENERIC
-# For the MRU400 family, the possible output powers are [0, 0.1, 0.2, ... , 0.9, 1.0]
-# For the MRU400 family, rssiFilter with value 0 deactivates filtering by rssi
-# For the MRU400 family, username and password are mandatory for the configuration sync with the reader
+# sort rssiFilters and outputPowers so the values map to the antennas list
+# possible output powers are [0.1, 0.2, ... , 0.9, 1.0]; there is no code for 0
+# rssiFilter with value 0 deactivates filtering by rssi
+#
+# SECURITY: username and password are stored here in plain text. Keep config.yaml
+# readable only by the account running the service, and never bake it into an image.
 readers:
   - name: reader1
     address: 192.168.1.100
@@ -68,7 +78,7 @@ readers:
     mode: host
     antennas: [4]
   - name: reader2
-    type: MRU400
+    type: NewGen
     address: 192.168.1.101
     username: SET_IN_SERVER
     password: SET_IN_SERVER

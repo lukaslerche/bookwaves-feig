@@ -67,9 +67,140 @@ See `config.example.yaml` for the complete configuration template.
 **Reader configurations:**
 - Name, IP address, port
 - Protocol: optional; `uhf` is used when omitted, or set `hf`
-- Listener port (`listenerPort`) for reader push notifications to this service
+- Listener port (`listenerPort`) for reader push notifications to this service. Required in `notification` mode.
 - Operating mode: `host` or `notification`
 - Antenna numbers (as array, optional). Do not set for `hf` readers.
+- `type`: `GENERIC` (default), `NewGen` or `OldGen` — see [Configuration sync](#configuration-sync)
+- `rssiFilters`, `outputPowers`: per-antenna settings for synchronised readers
+- `username`, `password`: reader login, `NewGen` only
+
+**Top-level keys:**
+- `hostName` - the address readers dial back to in notification mode. Written to synchronised notification readers so they know where to send tag reads. Leave unset to configure the reader's target address by hand.
+- `readerConfigurationPersistent` - whether configuration written to a reader is stored in its EEPROM. Defaults to `true`. When `false`, the reader reverts to its stored configuration on power cycle and is reconfigured on the next connection.
+
+### Configuration sync
+
+For readers with a `type` of `NewGen` or `OldGen`, `config.yaml` is the single source of
+truth. When the service connects to such a reader it reads the reader's live
+configuration, compares it parameter by parameter, and rewrites **only the parameters
+that differ**. A reader that already matches is not written to at all.
+
+| `type` | Hardware | Parameter tree | Login | Persistence reset |
+| --- | --- | --- | --- | --- |
+| `GENERIC` | any | not managed | - | - |
+| `NewGen` | e.g. MRU400X | `OperatingMode.AutoReadModes` | yes | yes |
+| `OldGen` | e.g. MRU102 | `OperatingMode.NotificationMode` | no | no |
+
+Synchronisation happens when a reader is registered at startup, and again when a
+notification reader's listener starts. A reader that is unreachable at startup — for
+example because PoE to it is switched off — is registered anyway and synchronised on the
+next connection; it does not stop the service or the other readers from starting.
+
+To resynchronise on demand:
+
+```bash
+curl -X POST http://localhost:7070/readers/reader2/sync
+curl -X POST "http://localhost:7070/readers/reader2/sync?force=true"   # rewrite every parameter
+```
+
+`GET /readers` reports each reader's `syncState`, one of `UNMANAGED`, `NEVER_CHECKED`,
+`UNREACHABLE`, `IN_SYNC` or `DRIFTED`.
+
+**Not written, ever.** The reader's own IP address, hostname and any access-protection or
+credential parameter are refused by the synchronisation engine. Changing a reader's
+address from here could put it beyond reach of the host that would have to change it
+back, and a credential change can lock the reader in a way only the manufacturer can
+undo. Set those through ISOStart or the reader's web interface.
+
+**Host mode is only partially covered.** A `NewGen` or `OldGen` reader in host mode has
+its operating mode and antenna settings synchronised, but not the remaining host-mode
+settings listed under [Host mode configuration](#host-mode-configuration); the service
+logs a warning saying so. Set the rest by hand for now.
+
+### Configuration sync examples
+
+A managed notification reader. `hostName` and `listenerPort` together tell the reader
+where to send tag reads, so both must be right or notifications never arrive.
+
+```yaml
+hostName: "192.168.1.10"        # this host, as the reader can reach it
+
+readers:
+  - name: gate-in
+    type: NewGen
+    address: 192.168.1.101
+    port: 10001                 # port this service connects to on the reader
+    listenerPort: 20001         # port the reader connects back to on this host
+    mode: notification
+    username: admin
+    password: "CHANGE-ME"
+    antennas: [1, 2]
+    rssiFilters: [60, 65]       # antenna 1 -> 60, antenna 2 -> 65
+    outputPowers: [0.1, 0.8]    # antenna 1 -> 0.1, antenna 2 -> 0.8
+```
+
+The three per-antenna lists are positional and must be the same length. An
+`rssiFilters` value of `0` disables filtering for that antenna; `outputPowers` accepts
+`0.1` to `1.0` in steps of `0.1`, and has no code for `0`.
+
+Managed and unmanaged readers mix freely — anything without a `type` is left exactly as
+an operator configured it:
+
+```yaml
+readers:
+  - name: counter-1             # older generation, no login
+    type: OldGen
+    address: 192.168.1.102
+    port: 10001
+    listenerPort: 20002
+    mode: notification
+    antennas: [1]
+    rssiFilters: [55]
+    outputPowers: [0.5]
+
+  - name: staff-desk            # managed but host mode: only partly synchronised
+    type: NewGen
+    address: 192.168.1.103
+    port: 10001
+    mode: host
+    username: admin
+    password: "CHANGE-ME"
+    antennas: [4]
+    rssiFilters: [60]
+    outputPowers: [1.0]
+
+  - name: hf-retrofit           # not managed; sync is uhf only
+    address: 192.168.1.105
+    port: 10001
+    protocol: hf
+    listenerPort: 20003
+    mode: notification
+```
+
+**What gets written.** For `gate-in` above, 18 parameters: the operating mode; RSSI
+filter and output power per antenna; persistence reset mode and time per antenna; and,
+because it is in notification mode, the multiplexer, selected antennas, four data
+selectors, transponder valid time, and the notification channel's hold time, port and
+address. The same reader as `OldGen` is 15 — that generation has no persistence reset,
+and names two data selectors `AntennaNo` and `UID` rather than `Antenna` and `IDD`.
+
+The channel address is written only when `hostName` is set. Without it everything else
+still synchronises, and the reader's notification target address must be set by hand.
+
+Setting `readerConfigurationPersistent: false` keeps changes out of the reader's EEPROM,
+so a power cycle restores whatever was there before — useful while finding the right
+`outputPowers` for a site.
+
+```bash
+# What does the service think of each reader?
+curl -s http://localhost:7070/readers | jq '.readers[] | {name, type, syncState, syncDetail}'
+
+# Compare against config.yaml and repair whatever drifted
+curl -X POST http://localhost:7070/readers/gate-in/sync
+
+# Rewrite every parameter, for a reader whose reported state you do not trust
+curl -X POST "http://localhost:7070/readers/gate-in/sync?force=true"
+```
 
 ### Example Configuration
 
@@ -120,8 +251,10 @@ readers:
 **Important notes:**
 - Only configure passwords for tag formats you actually use
 - Replace placeholder passwords with your actual tag passwords
+- Reader `username` and `password` are stored in `config.yaml` in plain text. Keep the file readable only by the account running the service, and do not bake it into a container image — mount it at runtime.
 - Every notification-mode reader must have a unique `listenerPort`
 - When running in Docker, publish a listener port range that covers all configured listenerPort values (for example `-p 20001-20020:20001-20020`)
+- The service can confirm that it holds a listener port itself, but it cannot verify that a reader can *reach* that port. NAT, Docker port publishing and firewall rules between reader and host are the operator's responsibility; if notifications never arrive, check those first.
 - If `tagFileLoggingEnabled` is true, ensure `tagFileLoggingPath` is writable in the runtime (in Docker, mount that path to persist logs)
 
 ### Configuring the RFID reader with ISOStart or web interface
@@ -201,9 +334,46 @@ Returns all configured readers with their status and configuration.
       "antennaMask": "0x0F",
       "isConnected": true,
       "connectionStatus": "connected",
-      "notificationActive": false
+      "notificationActive": false,
+      "type": "NewGen",
+      "syncState": "IN_SYNC",
+      "syncDetail": "configuration matches"
     }
   ]
+}
+```
+
+`syncState` is one of:
+
+| State | Meaning |
+| --- | --- |
+| `UNMANAGED` | `type` is `GENERIC`; this service does not manage the reader's configuration |
+| `NEVER_CHECKED` | the reader has not been reached yet |
+| `UNREACHABLE` | the reader could not be contacted |
+| `IN_SYNC` | the reader matches `config.yaml` |
+| `DRIFTED` | the reader differs from `config.yaml` and could not be repaired; see `syncDetail` |
+
+#### Synchronise a Reader
+```http
+POST /readers/{readerName}/sync
+POST /readers/{readerName}/sync?force=true
+```
+
+Compares the reader against `config.yaml` and rewrites the parameters that have drifted.
+With `force=true` every parameter is rewritten whether or not it differs.
+
+**Response:**
+```json
+{
+  "success": true,
+  "reader": "reader2",
+  "forced": false,
+  "inSync": false,
+  "drifted": [
+    "AirInterface.Antenna.UHF.No1.RSSIFilter (RSSI filter for antenna 1): expected 60, found 99"
+  ],
+  "written": ["AirInterface.Antenna.UHF.No1.RSSIFilter"],
+  "summary": "Reader reader2: wrote 1 parameter(s) - AirInterface.Antenna.UHF.No1.RSSIFilter"
 }
 ```
 

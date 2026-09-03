@@ -1,37 +1,26 @@
 package de.bookwaves;
 
-import de.bookwaves.ReaderManager.ReaderOperationException;
-
-import de.feig.fedm.Config;
-import de.feig.fedm.ReaderModule;
-
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
+import de.bookwaves.sync.ReaderMode;
+import de.bookwaves.sync.ReaderProfile;
+import de.bookwaves.sync.ReaderProfiles;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Configuration class representing an RFID reader.
+ * Configuration class representing an RFID reader, as read from {@code config.yaml}.
+ *
+ * <p>A plain holder. Which parameters a configuration implies, and what they are called
+ * on a given generation of hardware, belongs to a {@link ReaderProfile}.
  */
 public class ReaderConfig {
-    private static final int TIMEOUT = 2000; // 2 seconds
 
     private static Logger log() {
         return LoggerFactory.getLogger(ReaderConfig.class);
-    }
-
-    public enum ReaderType {
-        GENERIC,
-        MRU400
-    }
-
-    public enum ConfigurationState {
-        CONFIGURED,
-        MISCONFIGURED
     }
 
     private String name;
@@ -45,47 +34,7 @@ public class ReaderConfig {
     private List<Double> outputPowers = new ArrayList<>();
     private String username;
     private String password;
-    private ReaderType type = ReaderType.GENERIC;
-
-    public ReaderConfig() {
-        // Default constructor for YAML deserialization
-    }
-
-    public ReaderConfig(String name, String address, int port, Integer listenerPort, String mode, List<Integer> antennas, String username, String password) {
-        this.name = name;
-        this.address = address;
-        this.port = port;
-        this.listenerPort = listenerPort;
-        this.mode = mode;
-        this.type = ReaderType.GENERIC;
-        this.username = username;
-        this.password = password;
-        setAntennas(antennas);
-    }
-
-    public ReaderConfig(String name, String address, int port, Integer listenerPort, String mode, List<Integer> antennas, List<Double> outputPowers, List<Integer> rssiFilters) {
-        this.name = name;
-        this.address = address;
-        this.port = port;
-        this.listenerPort = listenerPort;
-        this.mode = mode;
-        this.type = ReaderType.GENERIC;
-        this.rssiFilters = rssiFilters;
-        this.outputPowers = outputPowers;
-        setAntennas(antennas);
-    }
-
-    public ReaderConfig(String name, String address, int port, Integer listenerPort, String mode, List<Integer> antennas) {
-        this.name = name;
-        this.address = address;
-        this.port = port;
-        this.listenerPort = listenerPort;
-        this.mode = mode;
-        this.type = ReaderType.GENERIC;
-        this.username = "";
-        this.password = "";
-        setAntennas(antennas);
-    }
+    private String type = ReaderProfiles.GENERIC;
 
     public String getName() {
         return name;
@@ -154,12 +103,33 @@ public class ReaderConfig {
         this.protocol = protocol;
     }
 
-    public ReaderType getType() {
-        return type; 
+    /** The raw {@code type} value from configuration. */
+    public String getType() {
+        return type;
     }
 
-    public void setType(ReaderType type) {
-        this.type = type != null ? type : ReaderType.GENERIC;
+    public void setType(String type) {
+        this.type = (type == null || type.isBlank()) ? ReaderProfiles.GENERIC : type.trim();
+    }
+
+    /**
+     * The profile describing this reader's parameter set, or empty when its
+     * configuration is not managed by this service.
+     *
+     * @throws IllegalArgumentException if {@code type} names no known profile
+     */
+    public Optional<ReaderProfile> getProfile() {
+        return ReaderProfiles.find(type);
+    }
+
+    /** Whether this service synchronises this reader's configuration. */
+    public boolean isManaged() {
+        return getProfile().isPresent();
+    }
+
+    /** Whether this reader pushes tag reads rather than being polled. */
+    public boolean isNotificationMode() {
+        return ReaderMode.NOTIFICATION.matches(mode);
     }
 
     public boolean isHfProtocol() {
@@ -167,12 +137,8 @@ public class ReaderConfig {
     }
 
     public boolean hasCredentials() {
-        return (
-            username != null &&
-            !username.isBlank() &&
-            password != null &&
-            !password.isBlank()
-        );
+        return username != null && !username.isBlank()
+            && password != null && !password.isBlank();
     }
 
     public List<Integer> getAntennas() {
@@ -184,7 +150,7 @@ public class ReaderConfig {
     }
 
     public List<Integer> getRssiFilters() {
-        return rssiFilters; 
+        return rssiFilters;
     }
 
     public void setRssiFilters(List<Integer> rssiFilters) {
@@ -192,32 +158,18 @@ public class ReaderConfig {
     }
 
     public List<Double> getOutputPowers() {
-        return outputPowers; 
+        return outputPowers;
     }
 
     public void setOutputPowers(List<Double> outputPowers) {
         this.outputPowers = outputPowers == null ? new ArrayList<>() : new ArrayList<>(outputPowers);
     }
 
-    public synchronized ConfigurationState checkConfig(ReaderModule readerModule) throws ReaderOperationException {
-        if (getType() == ReaderType.GENERIC) {
-            log().info("Generic Reader: configuration won't be checked.");
-        }
-        return ConfigurationState.CONFIGURED;
-    }
-
-    public synchronized int applyConfig(ReaderModule readerModule) throws ReaderOperationException {
-        if (getType() == ReaderType.GENERIC) {
-            log().info("Generic Reader: no configuration applied.");
-        }
-        return 0;
-    }
-
     /**
      * Computes the antenna bitmask from the list of antenna numbers.
      * Antenna 1 = 0x01, Antenna 2 = 0x02, Antenna 3 = 0x04, etc.
      * Multiple antennas are combined with bitwise OR.
-     * 
+     *
      * @return the antenna bitmask as a byte
      */
     public byte getAntennaMask() {
@@ -233,7 +185,7 @@ public class ReaderConfig {
                 log().warn("Ignoring invalid antenna index {} for reader {}", antenna, name);
             }
         }
-        log().info("Computed antenna mask 0x{} for reader {} from {}", String.format("%02X", mask), name, antennas);
+        log().debug("Computed antenna mask 0x{} for reader {} from {}", String.format("%02X", mask), name, antennas);
         return (byte) mask;
     }
 
@@ -246,23 +198,5 @@ public class ReaderConfig {
             return 0x01;
         }
         return getAntennaMask();
-    }
-
-    /**
-     * Checks if listner port is open, if the host name was set properly in the config
-     */
-    public boolean isListenerPortOpen(String hostName) {
-        if (hostName == null) {
-            log().info("Reader {}: hostName is null, listner port check skipped.", getName(), getListenerPort());
-            return true;
-        }
-        log().info("Reader {}: checking if listener port {} is open...", getName(), getListenerPort());
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(hostName, getListenerPort()), TIMEOUT);
-            return true; 
-        } catch (IOException e) {
-            log().warn("Reader {}: failed to connect to {}:{}", getName(), hostName, getListenerPort(), e);
-            return false; 
-        }
     }
 }
