@@ -23,6 +23,9 @@ public class FeigReaderConfigPort implements ReaderConfigPort {
 
     private static final Logger log = LoggerFactory.getLogger(FeigReaderConfigPort.class);
 
+    /** Answered by a reader that has no RAM-only configuration bank. */
+    private static final int NO_RAM_CONFIGURATION = -114;
+
     private final ReaderModule readerModule;
     private final String readerName;
 
@@ -92,7 +95,28 @@ public class FeigReaderConfigPort implements ReaderConfigPort {
     @Override
     public void apply(boolean persistent) throws ReaderOperationException {
         log.debug("Reader {}: applying configuration (persistent={})", readerName, persistent);
-        check(readerModule.config().applyConfiguration(persistent), "apply configuration");
+
+        // Parameters are already permanent by the time this runs, so a non-persistent
+        // apply asks for something no reader delivers - including ones that answer ok.
+        if (!persistent) {
+            log.warn("Reader {}: a non-persistent apply was requested, but no tested reader"
+                + " honours one - the parameters already written are expected to survive a"
+                + " power cycle. Treat this as a permanent change.", readerName);
+        }
+
+        int state = readerModule.config().applyConfiguration(persistent);
+
+        // A bare error code here reads as "nothing happened", when the opposite is true.
+        if (!persistent && state == NO_RAM_CONFIGURATION) {
+            throw new ReaderOperationException(
+                "Reader " + readerName + ": this reader has no RAM-only configuration, so a"
+                    + " non-persistent apply is not possible. The parameters written before this"
+                    + " point are already on the reader and will survive a power cycle. Set"
+                    + " readerConfigurationPersistent: true to say so deliberately.",
+                state);
+        }
+
+        check(state, "apply configuration");
     }
 
     /**

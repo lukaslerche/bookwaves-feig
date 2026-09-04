@@ -41,8 +41,7 @@ public record UhfProfile(
         new StepCounted(Duration.ofSeconds(1), Duration.ofMillis(100));
 
     /** How long the reader holds the notification connection open. */
-    private static final StepCounted CONNECTION_HOLD_TIME =
-        new StepCounted(Duration.ofSeconds(10), Duration.ofMillis(1));
+    private static final Duration CONNECTION_HOLD_TIME = Duration.ofSeconds(10);
 
     /** How long after a read the reader resets the transponder persistence flags. */
     private static final StepCounted PERSISTENCE_RESET_TIME =
@@ -135,27 +134,22 @@ public record UhfProfile(
             "transponder valid time"));
         specs.add(new ParamSpec(
             notificationTarget.connectionHoldTimeParameter(),
-            ParamValue.ofLong(CONNECTION_HOLD_TIME.value()),
+            notificationTarget.holdTime().of(CONNECTION_HOLD_TIME),
             "notification connection hold time"));
         specs.add(new ParamSpec(
             notificationTarget.portNumberParameter(),
             ParamValue.ofLong(config.getListenerPort()),
             "port the reader sends notifications to"));
 
-        // Without a host name the address has to be set on the reader by hand. Leaving
-        // the parameter out keeps it from being reported as drift.
-        if (hostName != null && !hostName.isBlank()) {
-            specs.add(new ParamSpec(
-                notificationTarget.addressParameter(),
-                ParamValue.text(hostName),
-                "address the reader sends notifications to"));
-        }
+        // Without a usable host name the address has to be set on the reader by hand.
+        // Leaving the parameter out keeps it from being reported as drift.
+        notificationTarget.address().of(hostName).ifPresent(value -> specs.add(new ParamSpec(
+            notificationTarget.addressParameter(),
+            value,
+            "address the reader sends notifications to")));
     }
 
-    /**
-     * A duration together with the step the reader counts it in. The step differs per
-     * parameter, so it is stated with the value rather than left to a comment.
-     */
+    /** A duration together with the step the reader counts it in, which differs per parameter. */
     private record StepCounted(Duration duration, Duration step) {
 
         /** The number the reader stores for this duration. */

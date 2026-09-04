@@ -109,8 +109,11 @@ class ReaderProfilesTest {
         assertTrue(parameters.contains("HostInterface.LAN.Remote.Channel1.PortNumber"));
     }
 
+    /** A host name both generations can store: the older one needs a literal IPv4. */
+    private static final String HOST = "192.168.1.235";
+
     private static ParamSpec spec(ReaderProfile profile, ReaderConfig config, String name) {
-        return profile.parametersFor(config, "h").stream()
+        return profile.parametersFor(config, HOST).stream()
             .filter(candidate -> candidate.name().equals(name))
             .findFirst()
             .orElseThrow(() -> new AssertionError(name + " is not in the " + profile.id() + " profile"));
@@ -138,6 +141,22 @@ class ReaderProfilesTest {
     }
 
     @Test
+    @DisplayName("the generations store the connection hold time differently")
+    void holdTimeEncodingDiffersByGeneration() {
+        ReaderConfig config = reader("NewGen", "notification");
+
+        // Ten seconds: two bytes of milliseconds on one generation, one byte of seconds
+        // on the other, where 10000 would not fit.
+        assertEquals(ParamValue.ofLong(10000),
+            spec(ReaderProfiles.NEW_GEN, config,
+                "HostInterface.LAN.Remote.Channel1.ConnectionHoldTime").desired());
+        assertEquals(ParamValue.ofByte(10),
+            spec(ReaderProfiles.OLD_GEN, config,
+                "OperatingMode.NotificationMode.Transmission.Destination.ConnectionHoldTime")
+                .desired());
+    }
+
+    @Test
     @DisplayName("parameters are written as the type the reader stores them as")
     void parameterTypesMatchTheReader() {
         ReaderConfig config = reader("NewGen", "notification");
@@ -153,12 +172,12 @@ class ReaderProfilesTest {
     void generationsUseDifferentNotificationTargets() {
         ReaderConfig config = reader("NewGen", "notification");
 
-        List<String> newGen = names(ReaderProfiles.NEW_GEN, config, "h");
+        List<String> newGen = names(ReaderProfiles.NEW_GEN, config, HOST);
         assertTrue(newGen.contains("HostInterface.LAN.Remote.Channel1.Address"));
         assertTrue(newGen.contains("HostInterface.LAN.Remote.Channel1.PortNumber"));
         assertTrue(newGen.contains("HostInterface.LAN.Remote.Channel1.ConnectionHoldTime"));
 
-        List<String> oldGen = names(ReaderProfiles.OLD_GEN, config, "h");
+        List<String> oldGen = names(ReaderProfiles.OLD_GEN, config, HOST);
         assertTrue(oldGen.contains(
             "OperatingMode.NotificationMode.Transmission.Destination.IPv4.IPAddress"));
         assertTrue(oldGen.contains(
@@ -166,6 +185,35 @@ class ReaderProfilesTest {
         assertTrue(oldGen.contains(
             "OperatingMode.NotificationMode.Transmission.Destination.ConnectionHoldTime"));
         assertFalse(oldGen.stream().anyMatch(name -> name.startsWith("HostInterface.LAN.Remote")));
+    }
+
+    @Test
+    @DisplayName("the generations store the notification address differently")
+    void addressEncodingDiffersByGeneration() {
+        ReaderConfig config = reader("NewGen", "notification");
+
+        // 192.168.1.235 packed most significant byte first.
+        assertEquals(ParamValue.ofLong(3232236011L),
+            spec(ReaderProfiles.OLD_GEN, config,
+                "OperatingMode.NotificationMode.Transmission.Destination.IPv4.IPAddress")
+                .desired());
+        assertEquals(ParamValue.text("192.168.1.235"),
+            spec(ReaderProfiles.NEW_GEN, config,
+                "HostInterface.LAN.Remote.Channel1.Address").desired());
+    }
+
+    @Test
+    @DisplayName("a host name the packed field cannot hold is left off rather than guessed")
+    void unpackableHostNameIsOmitted() {
+        ReaderConfig config = reader("NewGen", "notification");
+
+        List<String> oldGen = names(ReaderProfiles.OLD_GEN, config, "gate-in.example.org");
+        assertFalse(oldGen.contains(
+            "OperatingMode.NotificationMode.Transmission.Destination.IPv4.IPAddress"));
+
+        // The generation with a text field takes it happily.
+        List<String> newGen = names(ReaderProfiles.NEW_GEN, config, "gate-in.example.org");
+        assertTrue(newGen.contains("HostInterface.LAN.Remote.Channel1.Address"));
     }
 
     @Test
