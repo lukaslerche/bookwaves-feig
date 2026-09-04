@@ -21,15 +21,19 @@ public final class ReaderProfiles {
         "NewGen",
         "OperatingMode.AutoReadModes",
         List.of("Date", "Antenna", "IDD", "Time"),
+        NotificationTarget.NEW_GEN,
+        OutputPowerCodec.NEW_GEN,
         true,
         true
     );
 
-    /** The older UHF generation, for example the MRU102. */
+    /** The older UHF generation, for example the MRU102, which has no date selector. */
     public static final ReaderProfile OLD_GEN = new UhfProfile(
         "OldGen",
         "OperatingMode.NotificationMode",
-        List.of("Date", "AntennaNo", "UID", "Time"),
+        List.of("AntennaNo", "UID", "Time"),
+        NotificationTarget.OLD_GEN,
+        OutputPowerCodec.OLD_GEN,
         false,
         false
     );

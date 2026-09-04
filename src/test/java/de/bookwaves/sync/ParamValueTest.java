@@ -50,18 +50,6 @@ class ParamValueTest {
     }
 
     @Test
-    @DisplayName("output power 0 is not a supported value")
-    void zeroOutputPowerIsUnsupported() {
-        assertTrue(OutputPowerCodec.isSupported(0.1));
-        assertTrue(OutputPowerCodec.isSupported(1.0));
-        assertEquals(0x10, OutputPowerCodec.code(0.1));
-        assertEquals(0x19, OutputPowerCodec.code(1.0));
-
-        assertThrows(IllegalArgumentException.class, () -> OutputPowerCodec.code(0.0));
-        assertThrows(IllegalArgumentException.class, () -> OutputPowerCodec.code(0.15));
-    }
-
-    @Test
     @DisplayName("an unrecognised mode is rejected and the supported modes are listed")
     void modeParsing() {
         assertEquals(ReaderMode.HOST, ReaderMode.parse("host"));

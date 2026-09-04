@@ -29,6 +29,8 @@ public class ConfigLoader {
 
     /** The highest antenna port the UHF readers expose. */
     private static final int MAX_ANTENNA = 4;
+    /** The reader stores the RSSI filter in one unsigned byte. */
+    private static final int MAX_RSSI_FILTER = 255;
 
     public static class Configuration {
         private List<ReaderConfig> readers;
@@ -268,11 +270,20 @@ public class ConfigLoader {
         requireMatchingLength(name, "rssiFilters", rssiFilters.size(), antennas.size());
         requireMatchingLength(name, "outputPowers", outputPowers.size(), antennas.size());
 
-        for (Double power : outputPowers) {
-            if (power == null || !OutputPowerCodec.isSupported(power)) {
+        for (Integer filter : rssiFilters) {
+            if (filter == null || filter < 0 || filter > MAX_RSSI_FILTER) {
                 throw new Exception("Invalid reader configuration for '" + name
-                    + "': output power " + power + " is not supported; supported values are "
-                    + OutputPowerCodec.supportedValues());
+                    + "': rssiFilter " + filter + " is out of range 0.." + MAX_RSSI_FILTER);
+            }
+        }
+
+        // Maximum power differs per generation.
+        OutputPowerCodec codec = profile.outputPowerCodec();
+        for (Double power : outputPowers) {
+            if (power == null || !codec.isSupported(power)) {
+                throw new Exception("Invalid reader configuration for '" + name
+                    + "': output power " + power + " is not supported by type " + profile.id()
+                    + "; supported values are " + codec.supportedValues());
             }
         }
 

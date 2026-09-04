@@ -140,8 +140,18 @@ readers:
 ```
 
 The three per-antenna lists are positional and must be the same length. An
-`rssiFilters` value of `0` disables filtering for that antenna; `outputPowers` accepts
-`0.1` to `1.0` in steps of `0.1`, and has no code for `0`.
+`rssiFilters` value is `0` to `255`, in -dBm, and `0` disables filtering for that
+antenna.
+
+`outputPowers` depends on the generation, and neither has a code for `0`:
+
+| type | accepted values |
+|------|-----------------|
+| `NewGen` | `0.1` to `1.0` in steps of `0.1` |
+| `OldGen` | `0.05`, `0.1`, `0.2`, `0.3`, `0.4`, `0.5` — `0.5` is that reader's full power |
+
+A value is checked against the generation that has to store it, so `1.0` is accepted
+for a `NewGen` reader and rejected for an `OldGen` one.
 
 Managed and unmanaged readers mix freely — anything without a `type` is left exactly as
 an operator configured it:

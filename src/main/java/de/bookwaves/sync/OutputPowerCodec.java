@@ -9,12 +9,14 @@ import static java.util.Map.entry;
  * Translation between the fractional output power in {@code config.yaml} and the code
  * the reader stores.
  *
- * <p>The reader encodes output power as ten steps, {@code 0x10} through {@code 0x19}.
- * There is no code for switching an antenna off, so {@code 0.0} is not a valid value.
+ * <p>Shared codes mean the same power, but the generations reach different maxima, so a
+ * value is only valid against the profile that has to store it. Neither has a code for
+ * switching an antenna off.
  */
-public final class OutputPowerCodec {
+public enum OutputPowerCodec {
 
-    private static final Map<Double, Integer> POWER_TO_CODE = Map.ofEntries(
+    /** The current generation, for example the MRU400X. */
+    NEW_GEN(Map.ofEntries(
         entry(0.1, 0x10),
         entry(0.2, 0x11),
         entry(0.3, 0x12),
@@ -25,23 +27,36 @@ public final class OutputPowerCodec {
         entry(0.8, 0x17),
         entry(0.9, 0x18),
         entry(1.0, 0x19)
-    );
+    )),
 
-    private OutputPowerCodec() {
+    /** The older generation, for example the MRU102, whose full power is 0.5 W. */
+    OLD_GEN(Map.ofEntries(
+        entry(0.05, 0x08),
+        entry(0.1, 0x10),
+        entry(0.2, 0x11),
+        entry(0.3, 0x12),
+        entry(0.4, 0x13),
+        entry(0.5, 0x14)
+    ));
+
+    private final Map<Double, Integer> powerToCode;
+
+    OutputPowerCodec(Map<Double, Integer> powerToCode) {
+        this.powerToCode = powerToCode;
     }
 
-    /** Whether {@code power} is one of the values the reader can store. */
-    public static boolean isSupported(double power) {
-        return POWER_TO_CODE.containsKey(power);
+    /** Whether {@code power} is one of the values this generation can store. */
+    public boolean isSupported(double power) {
+        return powerToCode.containsKey(power);
     }
 
     /**
      * The reader code for a fractional output power.
      *
-     * @throws IllegalArgumentException if the value is not one the reader supports
+     * @throws IllegalArgumentException if the value is not one this generation supports
      */
-    public static int code(double power) {
-        Integer code = POWER_TO_CODE.get(power);
+    public int code(double power) {
+        Integer code = powerToCode.get(power);
         if (code == null) {
             throw new IllegalArgumentException(
                 "Output power " + power + " is not supported; supported values are " + supportedValues());
@@ -50,7 +65,7 @@ public final class OutputPowerCodec {
     }
 
     /** The supported output power values, ascending. */
-    public static TreeSet<Double> supportedValues() {
-        return new TreeSet<>(POWER_TO_CODE.keySet());
+    public TreeSet<Double> supportedValues() {
+        return new TreeSet<>(powerToCode.keySet());
     }
 }

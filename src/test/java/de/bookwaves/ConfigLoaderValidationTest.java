@@ -30,6 +30,15 @@ class ConfigLoaderValidationTest {
         return config;
     }
 
+    /** The same reader as an older generation, which has no login. */
+    private static ReaderConfig oldGenReader() {
+        ReaderConfig config = managedReader();
+        config.setType("OldGen");
+        config.setUsername(null);
+        config.setPassword(null);
+        return config;
+    }
+
     private static String messageOf(ReaderConfig config) {
         Exception thrown = assertThrows(Exception.class,
             () -> ConfigLoader.validateReaderConfigurations(List.of(config)));
@@ -69,6 +78,42 @@ class ConfigLoaderValidationTest {
         String message = messageOf(config);
         assertTrue(message.contains("0.0"), message);
         assertTrue(message.contains("supported values"), message);
+    }
+
+    @Test
+    @DisplayName("an output power is judged against the generation that has to store it")
+    void outputPowerIsCheckedPerGeneration() {
+        ReaderConfig newGen = managedReader();
+        newGen.setOutputPowers(List.of(0.1, 0.8));
+        assertDoesNotThrow(() -> ConfigLoader.validateReaderConfigurations(List.of(newGen)));
+
+        // 0.8 W is beyond the older generation's full power of 0.5 W.
+        ReaderConfig oldGen = oldGenReader();
+        oldGen.setOutputPowers(List.of(0.1, 0.8));
+
+        String message = messageOf(oldGen);
+        assertTrue(message.contains("0.8"), message);
+        assertTrue(message.contains("supported values"), message);
+    }
+
+    @Test
+    @DisplayName("the older generation accepts its own low power step")
+    void oldGenAcceptsItsLowestStep() {
+        ReaderConfig config = oldGenReader();
+        config.setOutputPowers(List.of(0.05, 0.5));
+
+        assertDoesNotThrow(() -> ConfigLoader.validateReaderConfigurations(List.of(config)));
+    }
+
+    @Test
+    @DisplayName("an RSSI filter outside the reader's byte range is rejected at load")
+    void rssiFilterOutOfRangeIsRejected() {
+        ReaderConfig config = managedReader();
+        config.setRssiFilters(Arrays.asList(60, 300));
+
+        String message = messageOf(config);
+        assertTrue(message.contains("300"), message);
+        assertTrue(message.contains("rssiFilter"), message);
     }
 
     @Test

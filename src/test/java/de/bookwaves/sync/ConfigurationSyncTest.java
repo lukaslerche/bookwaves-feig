@@ -31,7 +31,7 @@ class ConfigurationSyncTest {
         config.setType("NewGen");
         config.setAntennas(List.of(1, 2));
         config.setRssiFilters(List.of(60, 65));
-        config.setOutputPowers(List.of(0.1, 0.8));
+        config.setOutputPowers(List.of(0.1, 0.5));
         return config;
     }
 
@@ -75,7 +75,7 @@ class ConfigurationSyncTest {
             ReaderConfig config = notificationReader();
             FakeReaderConfigPort port = FakeReaderConfigPort
                 .inSyncWith(ReaderProfiles.NEW_GEN, config, HOST)
-                .with(RSSI_ANTENNA_1, ParamValue.ofLong(99));
+                .with(RSSI_ANTENNA_1, ParamValue.ofByte(99));
 
             SyncReport report = syncFor(ReaderProfiles.NEW_GEN).check(port, config);
 
@@ -183,7 +183,7 @@ class ConfigurationSyncTest {
             ReaderConfig config = notificationReader();
             FakeReaderConfigPort port = FakeReaderConfigPort
                 .inSyncWith(ReaderProfiles.NEW_GEN, config, HOST)
-                .with(RSSI_ANTENNA_1, ParamValue.ofLong(1));
+                .with(RSSI_ANTENNA_1, ParamValue.ofByte(1));
 
             new ConfigurationSync(ReaderProfiles.NEW_GEN, HOST, false).apply(port, config, false);
 

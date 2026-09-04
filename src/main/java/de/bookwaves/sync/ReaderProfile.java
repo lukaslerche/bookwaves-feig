@@ -18,6 +18,9 @@ public interface ReaderProfile {
     /** Whether readers of this generation support username and password login. */
     boolean supportsAuthentication();
 
+    /** How this generation encodes antenna output power. */
+    OutputPowerCodec outputPowerCodec();
+
     /**
      * The parameters this configuration implies, in the order they should be written.
      *

@@ -66,8 +66,10 @@ readerConfigurationPersistent: true
 # protocol is optional and defaults to `uhf`; configuration sync is uhf only
 # do not set `antennas` for `hf` readers
 # sort rssiFilters and outputPowers so the values map to the antennas list
-# possible output powers are [0.1, 0.2, ... , 0.9, 1.0]; there is no code for 0
-# rssiFilter with value 0 deactivates filtering by rssi
+# output powers depend on the generation; there is no code for 0 in either
+#   NewGen  [0.1, 0.2, ... , 0.9, 1.0]
+#   OldGen  [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]; 0.5 is that reader's full power
+# rssiFilter is 0..255 in -dBm; value 0 deactivates filtering by rssi
 #
 # SECURITY: username and password are stored here in plain text. Keep config.yaml
 # readable only by the account running the service, and never bake it into an image.

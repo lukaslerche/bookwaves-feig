@@ -24,7 +24,7 @@ class ReaderProfilesTest {
         config.setListenerPort(20001);
         config.setAntennas(List.of(1, 2));
         config.setRssiFilters(List.of(60, 65));
-        config.setOutputPowers(List.of(0.1, 0.8));
+        config.setOutputPowers(List.of(0.1, 0.5));
         return config;
     }
 
@@ -107,6 +107,94 @@ class ReaderProfilesTest {
 
         assertFalse(parameters.contains("HostInterface.LAN.Remote.Channel1.Address"));
         assertTrue(parameters.contains("HostInterface.LAN.Remote.Channel1.PortNumber"));
+    }
+
+    private static ParamSpec spec(ReaderProfile profile, ReaderConfig config, String name) {
+        return profile.parametersFor(config, "h").stream()
+            .filter(candidate -> candidate.name().equals(name))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError(name + " is not in the " + profile.id() + " profile"));
+    }
+
+    @Test
+    @DisplayName("times are written in the steps the reader counts them in, not in seconds")
+    void timesUseReaderSteps() {
+        ReaderConfig config = reader("NewGen", "notification");
+
+        // TransponderValidTime counts in 100 ms steps, so one second is 10.
+        assertEquals(ParamValue.ofLong(10),
+            spec(ReaderProfiles.NEW_GEN, config, "OperatingMode.AutoReadModes.Filter.TransponderValidTime")
+                .desired());
+
+        // PersistenceResetTime counts in 5 ms steps, so one second is 200.
+        assertEquals(ParamValue.ofLong(200),
+            spec(ReaderProfiles.NEW_GEN, config,
+                "Transponder.PersistenceReset.Antenna.No1.PersistenceResetTime").desired());
+
+        // ConnectionHoldTime is already in milliseconds.
+        assertEquals(ParamValue.ofLong(10000),
+            spec(ReaderProfiles.NEW_GEN, config,
+                "HostInterface.LAN.Remote.Channel1.ConnectionHoldTime").desired());
+    }
+
+    @Test
+    @DisplayName("parameters are written as the type the reader stores them as")
+    void parameterTypesMatchTheReader() {
+        ReaderConfig config = reader("NewGen", "notification");
+
+        assertEquals(ParamType.BYTE,
+            spec(ReaderProfiles.NEW_GEN, config, "AirInterface.Antenna.UHF.No1.RSSIFilter").type());
+        assertEquals(ParamType.BOOL,
+            spec(ReaderProfiles.NEW_GEN, config, "Transponder.PersistenceReset.Mode").type());
+    }
+
+    @Test
+    @DisplayName("the generations use different notification target parameters")
+    void generationsUseDifferentNotificationTargets() {
+        ReaderConfig config = reader("NewGen", "notification");
+
+        List<String> newGen = names(ReaderProfiles.NEW_GEN, config, "h");
+        assertTrue(newGen.contains("HostInterface.LAN.Remote.Channel1.Address"));
+        assertTrue(newGen.contains("HostInterface.LAN.Remote.Channel1.PortNumber"));
+        assertTrue(newGen.contains("HostInterface.LAN.Remote.Channel1.ConnectionHoldTime"));
+
+        List<String> oldGen = names(ReaderProfiles.OLD_GEN, config, "h");
+        assertTrue(oldGen.contains(
+            "OperatingMode.NotificationMode.Transmission.Destination.IPv4.IPAddress"));
+        assertTrue(oldGen.contains(
+            "OperatingMode.NotificationMode.Transmission.Destination.PortNumber"));
+        assertTrue(oldGen.contains(
+            "OperatingMode.NotificationMode.Transmission.Destination.ConnectionHoldTime"));
+        assertFalse(oldGen.stream().anyMatch(name -> name.startsWith("HostInterface.LAN.Remote")));
+    }
+
+    @Test
+    @DisplayName("the older generation has no date data selector")
+    void oldGenHasNoDateSelector() {
+        List<String> parameters = names(ReaderProfiles.OLD_GEN, reader("OldGen", "notification"), "h");
+
+        assertFalse(parameters.contains("OperatingMode.NotificationMode.DataSelector.Date"));
+        assertTrue(parameters.contains("OperatingMode.NotificationMode.DataSelector.AntennaNo"));
+        assertTrue(parameters.contains("OperatingMode.NotificationMode.DataSelector.UID"));
+        assertTrue(parameters.contains("OperatingMode.NotificationMode.DataSelector.Time"));
+    }
+
+    @Test
+    @DisplayName("each generation carries the output power codec its hardware supports")
+    void generationsCarryTheirOwnPowerCodec() {
+        assertEquals(OutputPowerCodec.NEW_GEN, ReaderProfiles.NEW_GEN.outputPowerCodec());
+        assertEquals(OutputPowerCodec.OLD_GEN, ReaderProfiles.OLD_GEN.outputPowerCodec());
+    }
+
+    @Test
+    @DisplayName("a power one generation cannot reach is refused by that generation's profile")
+    void aPowerBeyondAGenerationIsRefused() {
+        ReaderConfig config = reader("NewGen", "notification");
+        config.setOutputPowers(List.of(0.1, 0.8));
+
+        assertFalse(ReaderProfiles.NEW_GEN.parametersFor(config, "h").isEmpty());
+        assertThrows(IllegalArgumentException.class,
+            () -> ReaderProfiles.OLD_GEN.parametersFor(config, "h"));
     }
 
     @Test
