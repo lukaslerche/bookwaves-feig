@@ -13,10 +13,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NotificationListenerFilterTest {
     private static NotificationListener listener() {
+        return listener(config());
+    }
+
+    private static ReaderConfig config() {
         ReaderConfig config = new ReaderConfig();
         config.setName("r");
         config.setAntennas(List.of(1, 2));
         config.setRssiFilters(List.of(40, 70));
+        return config;
+    }
+
+    private static NotificationListener listener(ReaderConfig config) {
         // Filtering and caching do not call the SDK; no reader or native TagItem is needed.
         return new NotificationListener(null, 10, new ReentrantLock(), config.getAntennas(),
             false, config.rssiFilter());
@@ -77,6 +85,25 @@ class NotificationListenerFilterTest {
             }
         } finally {
             listener.close();
+        }
+    }
+
+    @Test
+    void replacingListenerDoesNotClearFilterHealth() {
+        ReaderConfig config = config();
+        NotificationListener first = listener(config);
+        try {
+            assertTrue(first.filterObservation("epc", null, List.of()).isPresent());
+        } finally {
+            first.close();
+        }
+        NotificationListener next = listener(config);
+        try {
+            assertEquals(RssiFilter.State.DEGRADED, config.rssiFilter().health().orElseThrow().state());
+            next.filterObservation("epc", null, List.of(new AntennaRssi(1, -30), new AntennaRssi(2, -80)));
+            assertEquals(RssiFilter.State.APPLIED, config.rssiFilter().health().orElseThrow().state());
+        } finally {
+            next.close();
         }
     }
 

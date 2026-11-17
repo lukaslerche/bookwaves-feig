@@ -212,13 +212,17 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         }
         // Invalid RSSI items are unjudgeable, not evidence of a disallowed antenna.
         List<NotificationEvent.AntennaRssi> validReadings = new ArrayList<>();
+        List<Integer> invalidAntennas = new ArrayList<>();
         for (RssiItem rssiItem : tagItem.rssiValues()) {
             if (rssiItem.isValid()) {
                 validReadings.add(new NotificationEvent.AntennaRssi(rssiItem.antennaNumber(), rssiItem.rssi()));
+            } else {
+                invalidAntennas.add(rssiItem.antennaNumber());
             }
         }
         Optional<List<NotificationEvent.AntennaRssi>> strongEnough =
-            filterObservation(event.epc, tagItem, validReadings);
+            filterObservation(event.epc, tagItem, validReadings,
+                validReadings.isEmpty() ? invalidAntennas : List.of());
         if (strongEnough.isEmpty()) {
             log.debug("Dropped {} {} because no reading survived the antenna and RSSI filters", sourceLogName, event.epc);
             return;
@@ -242,6 +246,12 @@ public class NotificationListener implements IReaderListener, IConnectListener {
     Optional<List<NotificationEvent.AntennaRssi>> filterObservation(
         String epc, TagItem tagItem, List<NotificationEvent.AntennaRssi> validReadings
     ) {
+        return filterObservation(epc, tagItem, validReadings, List.of());
+    }
+
+    private Optional<List<NotificationEvent.AntennaRssi>> filterObservation(
+        String epc, TagItem tagItem, List<NotificationEvent.AntennaRssi> validReadings, List<Integer> invalidAntennas
+    ) {
         List<NotificationEvent.AntennaRssi> allowed = new ArrayList<>();
         for (NotificationEvent.AntennaRssi reading : validReadings) {
             if (allowedAntennas.isEmpty() || allowedAntennas.contains(reading.antennaNumber)) {
@@ -250,7 +260,7 @@ public class NotificationListener implements IReaderListener, IConnectListener {
         }
         Optional<List<NotificationEvent.AntennaRssi>> kept = !validReadings.isEmpty() && allowed.isEmpty()
             ? Optional.empty()
-            : rssiFilter.filter(epc, allowed, reading -> reading.antennaNumber, reading -> reading.rssi);
+            : rssiFilter.filter(epc, allowed, reading -> reading.antennaNumber, reading -> reading.rssi, invalidAntennas);
         String normalizedEpc = epc.toUpperCase(Locale.ROOT);
         if (kept.isPresent()) {
             writeTargetsByEpc.put(normalizedEpc, new WriteTarget(tagItem, strongestAntenna(kept.get())));

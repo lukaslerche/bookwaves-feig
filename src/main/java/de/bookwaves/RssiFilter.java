@@ -3,11 +3,13 @@ package de.bookwaves;
 import de.bookwaves.sync.RssiFilterMode;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Set;
 import java.util.function.ToIntFunction;
 
 import org.slf4j.Logger;
@@ -30,7 +32,26 @@ public final class RssiFilter {
 
     private final String readerName;
     private final Map<Integer, Integer> minimumByAntenna;
-    private final AtomicBoolean warnedAboutMissingRssi = new AtomicBoolean(false);
+    public enum State { NOT_YET_OBSERVED, APPLIED, DEGRADED }
+    public enum BypassReason { MISSING_RSSI, INVALID_RSSI }
+    public record Health(State state, Map<Integer, BypassReason> affectedAntennas,
+                         Set<BypassReason> unknownAntennaReasons) {}
+
+    private final Map<Integer, BypassReason> affectedAntennas = new HashMap<>();
+    private final Set<Integer> pendingUnknownRecovery = new HashSet<>();
+    private final Set<BypassReason> unknownReasons = EnumSet.noneOf(BypassReason.class);
+    private final Set<BypassReason> loggedReasons = EnumSet.noneOf(BypassReason.class);
+    private boolean applied;
+
+    /** Not applicable when the reader has no active software threshold. */
+    public synchronized Optional<Health> health() {
+        if (minimumByAntenna.isEmpty()) {
+            return Optional.empty();
+        }
+        State state = !affectedAntennas.isEmpty() || !pendingUnknownRecovery.isEmpty() ? State.DEGRADED
+            : applied ? State.APPLIED : State.NOT_YET_OBSERVED;
+        return Optional.of(new Health(state, Map.copyOf(affectedAntennas), Set.copyOf(unknownReasons)));
+    }
 
     private RssiFilter(String readerName, Map<Integer, Integer> minimumByAntenna) {
         this.readerName = readerName;
@@ -40,7 +61,7 @@ public final class RssiFilter {
     /** The filter a reader's configuration asks for. */
     public static RssiFilter forReader(ReaderConfig config) {
         Map<Integer, Integer> minimumByAntenna = new HashMap<>();
-        if (config.getEffectiveRssiFilterMode() != RssiFilterMode.SOFTWARE) {
+        if (config.isHfProtocol() || config.getEffectiveRssiFilterMode() != RssiFilterMode.SOFTWARE) {
             return new RssiFilter(config.getName(), minimumByAntenna);
         }
         List<Integer> antennas = config.getAntennas();
@@ -64,16 +85,20 @@ public final class RssiFilter {
      */
     public <T> Optional<List<T>> filter(String epc, List<T> readings,
                                         ToIntFunction<T> antenna, ToIntFunction<T> rssi) {
+        return filter(epc, readings, antenna, rssi, List.of());
+    }
+
+    /** Invalid readings are not compared; supply their antennas if the observation passes them through. */
+    synchronized <T> Optional<List<T>> filter(String epc, List<T> readings,
+                                              ToIntFunction<T> antenna, ToIntFunction<T> rssi,
+                                              List<Integer> invalidAntennas) {
         if (minimumByAntenna.isEmpty()) {
             return Optional.of(readings);
         }
-        if (readings.isEmpty()) {
+        if (readings.isEmpty() && invalidAntennas.isEmpty()) {
             // Nothing to judge. Dropping it would hide every tag a misconfigured reader reports.
-            if (warnedAboutMissingRssi.compareAndSet(false, true)) {
-                log.warn("Reader {} reported {} without a signal strength; the RSSI filter lets such tags through",
-                    readerName, epc);
-            }
-            return Optional.of(List.of());
+            recordBypass(epc, 0, BypassReason.MISSING_RSSI);
+            return Optional.of(readings);
         }
 
         List<T> surviving = new ArrayList<>();
@@ -81,6 +106,14 @@ public final class RssiFilter {
             int readingAntenna = antenna.applyAsInt(reading);
             int readingRssi = rssi.applyAsInt(reading);
             Integer minimum = minimumByAntenna.get(readingAntenna);
+            if (minimum != null) {
+                applied = true;
+                affectedAntennas.remove(readingAntenna);
+                pendingUnknownRecovery.remove(readingAntenna);
+                if (pendingUnknownRecovery.isEmpty()) {
+                    unknownReasons.clear();
+                }
+            }
             boolean keep = minimum == null || signedDbm(readingRssi) >= minimum;
             if (keep) {
                 surviving.add(reading);
@@ -89,7 +122,28 @@ public final class RssiFilter {
                     readerName, epc, readingAntenna, signedDbm(readingRssi), readingRssi, minimum);
             }
         }
-        return surviving.isEmpty() ? Optional.empty() : Optional.of(surviving);
+        if (!readings.isEmpty() && surviving.isEmpty()) {
+            return Optional.empty();
+        }
+        for (int invalidAntenna : invalidAntennas) {
+            recordBypass(epc, invalidAntenna, BypassReason.INVALID_RSSI);
+        }
+        return Optional.of(surviving);
+    }
+
+    private void recordBypass(String epc, int antenna, BypassReason reason) {
+        if (antenna <= 0) {
+            pendingUnknownRecovery.addAll(minimumByAntenna.keySet());
+            unknownReasons.add(reason);
+        } else if (minimumByAntenna.containsKey(antenna)) {
+            affectedAntennas.put(antenna, reason);
+        } else {
+            return;
+        }
+        if (loggedReasons.add(reason)) {
+            log.warn("Reader {} passed through a tag observation without applying the RSSI threshold: {} for {} (antenna {})",
+                readerName, reason, epc, antenna > 0 ? antenna : "unknown");
+        }
     }
 
     /** Normalizes for comparison only; API readings retain the SDK's raw value. */

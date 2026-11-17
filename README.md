@@ -26,6 +26,17 @@ to build and run this repository. Relevant starting points:
 Local documentation covers features added after the documentation-site migration:
 
 - [Software-defined RSSI filtering](docs/adr/0002-filter-signal-strength-in-this-service.md)
+
+For readers with active software RSSI thresholds, `GET /readers` includes
+`rssiFilterHealth`, separate from configuration sync and notification status.
+Its state is `NOT_YET_OBSERVED` after service startup, `APPLIED` after Feig
+has used a threshold and no bypass is outstanding, or `DEGRADED` when a tag
+observation passed through without filtering. Check `affectedAntennas` and
+`unknownAntennaReasons` for missing or invalid RSSI, then check the reader's
+notification selectors, configured antennas, and notification connection.
+Recovery requires applying the threshold again on the affected antennas (all
+active antennas if the bypass antenna was unknown). Reconnects do not clear
+warnings; service restarts reset the in-memory status.
   (`rssiFilterMode: software` is the default; managed readers must synchronise successfully
   before use, including after reconnecting)
 - [Domain context](CONTEXT.md) and [architecture decisions](docs/adr/)

@@ -606,6 +606,8 @@ public class Main {
                         }
                         readerInfo.put("type", readerConfig.getType());
                         readerInfo.put("syncState", managedReader.getSyncState().name());
+                        readerConfig.rssiFilter().health()
+                            .ifPresent(health -> readerInfo.put("rssiFilterHealth", health));
                         if (managedReader.getSyncDetail() != null) {
                             readerInfo.put("syncDetail", managedReader.getSyncDetail());
                         }
@@ -2587,7 +2589,8 @@ public class Main {
             (rssiItem.isValid() ? judged : unjudged).add(reading);
         }
         return config.rssiFilter()
-            .filter(tagItem.iddToHexString(), judged, Tag.AntennaRssi::getAntennaNumber, Tag.AntennaRssi::getRssi)
+            .filter(tagItem.iddToHexString(), judged, Tag.AntennaRssi::getAntennaNumber, Tag.AntennaRssi::getRssi,
+                unjudged.stream().map(Tag.AntennaRssi::getAntennaNumber).toList())
             .map(kept -> {
                 List<Tag.AntennaRssi> readings = new ArrayList<>(kept);
                 readings.addAll(unjudged);
