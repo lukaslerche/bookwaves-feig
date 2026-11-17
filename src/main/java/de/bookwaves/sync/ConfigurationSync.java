@@ -67,9 +67,35 @@ public class ConfigurationSync {
         }
         port.apply(persistent);
 
+        if (!profile.supportsPersistenceReset()) {
+            for (ParamSpec spec : toWrite) {
+                if (UhfProfile.MRU102_PERSISTENCE_RESET_TIME.equals(spec.name())) {
+                    verifyMru102Timer(port, config, spec);
+                }
+            }
+        }
+
         log.info("Reader {}: wrote {} parameter(s){}", config.getName(), written.size(),
             persistent ? " persistently" : " until the reader restarts");
         return new SyncReport(config.getName(), drifts, written);
+    }
+
+    private void verifyMru102Timer(ReaderConfigPort port, ReaderConfig config, ParamSpec spec)
+            throws ReaderOperationException {
+        String context = "Reader " + config.getName() + ": could not verify " + spec.name() + " after write";
+        ParamValue actual;
+        try {
+            port.readCompleteConfiguration();
+            actual = port.get(spec.name(), spec.type());
+        } catch (ReaderOperationException e) {
+            ReaderOperationException failure = new ReaderOperationException(context + ": " + e.getMessage(), e.getErrorCode());
+            failure.initCause(e);
+            throw failure;
+        }
+        if (!spec.desired().equals(actual)) {
+            throw new ReaderOperationException(context + ": expected " + spec.desired().describe()
+                + " ticks, read " + actual.describe());
+        }
     }
 
     private List<SyncReport.Drift> findDrift(ReaderConfigPort port, ReaderConfig config)

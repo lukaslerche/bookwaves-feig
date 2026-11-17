@@ -334,9 +334,9 @@ public class ConfigLoader {
         requireStorable(name, TagTiming.TRANSPONDER_VALID_TIME, reader.getTransponderValidTime());
         requireStorable(name, TagTiming.PERSISTENCE_RESET_TIME, reader.getPersistenceResetTime());
 
-        if (!profile.supportsPersistenceReset() && reader.getPersistenceResetTime() != null) {
-            log().warn("Reader {} is type {}, which has no persistence reset; "
-                + "the configured persistenceResetTime is ignored", name, profile.id());
+        if (!profile.supportsPersistenceReset() && !ReaderMode.HOST.matches(reader.getMode())
+                && reader.getPersistenceResetTime() != null) {
+            log().warn("Reader {}: persistenceResetTime is ignored for type {} outside Host Mode", name, profile.id());
         }
 
         if (profile.supportsAuthentication() && !reader.hasCredentials()) {

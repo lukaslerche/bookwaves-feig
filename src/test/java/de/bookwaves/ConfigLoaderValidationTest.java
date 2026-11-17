@@ -408,7 +408,7 @@ class ConfigLoaderValidationTest {
     }
 
     @Test
-    @DisplayName("a persistence reset time on a generation without persistence reset still loads")
+    @DisplayName("an explicit OldGen persistence reset time still loads")
     void persistenceResetTimeOnOldGenLoads() {
         ReaderConfig oldGen = oldGenReader();
         oldGen.setOutputPowers(List.of(0.1, 0.5));

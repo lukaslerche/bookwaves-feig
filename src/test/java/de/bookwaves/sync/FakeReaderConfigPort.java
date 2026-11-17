@@ -23,6 +23,8 @@ class FakeReaderConfigPort implements ReaderConfigPort {
     private final List<String> writes = new ArrayList<>();
 
     private String failWriteOf;
+    String ignoreWriteOf;
+    boolean failReadAfterApply;
     private int readCount;
     private int applyCount;
     private Boolean lastApplyPersistent;
@@ -75,8 +77,11 @@ class FakeReaderConfigPort implements ReaderConfigPort {
     }
 
     @Override
-    public void readCompleteConfiguration() {
+    public void readCompleteConfiguration() throws ReaderOperationException {
         readCount++;
+        if (failReadAfterApply && applyCount > 0) {
+            throw new ReaderOperationException("Fake reader could not reload configuration");
+        }
     }
 
     @Override
@@ -105,7 +110,9 @@ class FakeReaderConfigPort implements ReaderConfigPort {
         if (parameter.equals(failWriteOf)) {
             throw new ReaderOperationException("Fake reader refused to write " + parameter);
         }
-        values.put(parameter, value);
+        if (!parameter.equals(ignoreWriteOf)) {
+            values.put(parameter, value);
+        }
         writes.add(parameter);
     }
 

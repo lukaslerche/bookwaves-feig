@@ -39,6 +39,63 @@ class ConfigurationSyncTest {
         return new ConfigurationSync(profile, HOST, true);
     }
 
+    @Test
+    void oldGenManagesTheTimerOnlyWhenExplicitlyConfiguredInHostMode() {
+        ReaderConfig config = mru102Trial();
+        String timer = UhfProfile.MRU102_PERSISTENCE_RESET_TIME;
+        config.setMode("notification");
+        assertFalse(ReaderProfiles.OLD_GEN.parametersFor(config, HOST).stream()
+            .anyMatch(spec -> timer.equals(spec.name())));
+        config.setMode("host");
+        config.setPersistenceResetTime(null);
+        assertFalse(ReaderProfiles.OLD_GEN.parametersFor(config, HOST).stream()
+            .anyMatch(spec -> timer.equals(spec.name())));
+    }
+
+    @Test
+    void mru102TrialWritesOneTimerAndReadsItBack() throws Exception {
+        ReaderConfig config = mru102Trial();
+        ReaderProfile profile = ReaderProfiles.OLD_GEN;
+        String timer = UhfProfile.MRU102_PERSISTENCE_RESET_TIME;
+        assertEquals(List.of(timer), profile.parametersFor(config, HOST).stream().map(ParamSpec::name)
+            .filter(name -> name.startsWith("Transponder.PersistenceReset")).toList());
+        FakeReaderConfigPort port = FakeReaderConfigPort.inSyncWith(profile, config, HOST)
+            .with(timer, ParamValue.ofLong(40));
+
+        syncFor(profile).apply(port, config, false);
+
+        assertEquals(List.of(timer), port.writes());
+        assertEquals(ParamValue.ofLong(100), port.valueOf(timer));
+        assertEquals(2, port.readCount());
+    }
+
+    @Test
+    void mru102TrialFailsOnAcknowledgedButUnappliedWriteOrFailedReadback() {
+        ReaderConfig config = mru102Trial();
+        ReaderProfile profile = ReaderProfiles.OLD_GEN;
+        String timer = UhfProfile.MRU102_PERSISTENCE_RESET_TIME;
+        for (boolean failRead : List.of(false, true)) {
+            FakeReaderConfigPort port = FakeReaderConfigPort.inSyncWith(profile, config, HOST)
+                .with(timer, ParamValue.ofLong(40));
+            port.failReadAfterApply = failRead;
+            port.ignoreWriteOf = failRead ? null : timer;
+
+            ReaderOperationException error = assertThrows(ReaderOperationException.class,
+                () -> syncFor(profile).apply(port, config, false));
+            assertTrue(error.getMessage().contains("could not verify " + timer), error.getMessage());
+            assertTrue(error.getMessage().contains(failRead ? "could not reload" : "expected 100 ticks, read 40"),
+                error.getMessage());
+        }
+    }
+
+    private static ReaderConfig mru102Trial() {
+        ReaderConfig config = notificationReader();
+        config.setType("OldGen");
+        config.setMode("host");
+        config.setPersistenceResetTime("500");
+        return config;
+    }
+
     @Nested
     @DisplayName("drift detection")
     class DriftDetection {

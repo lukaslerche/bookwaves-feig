@@ -52,6 +52,8 @@ public record UhfProfile(
     private static final String SELECTED_ANTENNAS = "AirInterface.Multiplexer.UHF.Internal.SelectedAntennas";
     private static final String RSSI_FILTER = "AirInterface.Antenna.UHF.No%d.RSSIFilter";
     private static final String OUTPUT_POWER = "AirInterface.Antenna.UHF.No%d.OutputPower";
+    static final String MRU102_PERSISTENCE_RESET_TIME =
+        "Transponder.PersistenceReset.Antenna.No1.PersistenceResetTime";
     private static final String PERSISTENCE_RESET_MODE = "Transponder.PersistenceReset.Mode";
     private static final String PERSISTENCE_RESET_TIME_PARAM =
         "Transponder.PersistenceReset.Antenna.No%d.PersistenceResetTime";
@@ -70,6 +72,11 @@ public record UhfProfile(
 
         if (supportsPersistenceReset) {
             addPersistenceReset(specs, config);
+        } else if (ReaderMode.HOST.matches(config.getMode())
+                && config.getPersistenceResetTime() != null && !config.getPersistenceResetTime().isBlank()) {
+            specs.add(new ParamSpec(MRU102_PERSISTENCE_RESET_TIME,
+                ParamValue.ofLong(TagTiming.PERSISTENCE_RESET_TIME.steps(config.getPersistenceResetTime())),
+                "OldGen persistence reset time (all antennas)"));
         }
 
         if (notification) {
