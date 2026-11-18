@@ -82,10 +82,43 @@ class ConfigurationSyncTest {
 
             ReaderOperationException error = assertThrows(ReaderOperationException.class,
                 () -> syncFor(profile).apply(port, config, false));
-            assertTrue(error.getMessage().contains("could not verify " + timer), error.getMessage());
-            assertTrue(error.getMessage().contains(failRead ? "could not reload" : "expected 100 ticks, read 40"),
-                error.getMessage());
+            assertTrue(error.getMessage().contains("could not verify managed configuration"), error.getMessage());
+            assertTrue(error.getMessage().contains(failRead ? "could not reload" : timer), error.getMessage());
+            if (!failRead) {
+                assertTrue(error.getMessage().contains("expected 100, found 40"), error.getMessage());
+            }
         }
+    }
+
+    @Test
+    void newGenReadsBackManagedConfigurationOnlyAfterWriting() throws Exception {
+        ReaderConfig config = notificationReader();
+        ReaderProfile profile = ReaderProfiles.NEW_GEN;
+        FakeReaderConfigPort port = FakeReaderConfigPort.inSyncWith(profile, config, HOST);
+        ConfigurationSync sync = syncFor(profile);
+
+        assertTrue(sync.apply(port, config, false).written().isEmpty());
+        assertEquals(1, port.readCount());
+        assertEquals(0, port.applyCount());
+
+        port.with(POWER_ANTENNA_1, ParamValue.ofByte(99));
+        assertEquals(List.of(POWER_ANTENNA_1), sync.apply(port, config, false).written());
+        assertEquals(3, port.readCount());
+        assertEquals(1, port.applyCount());
+    }
+
+    @Test
+    void newGenFailsWhenAnAcknowledgedWriteDoesNotTakeEffect() {
+        ReaderConfig config = notificationReader();
+        ReaderProfile profile = ReaderProfiles.NEW_GEN;
+        FakeReaderConfigPort port = FakeReaderConfigPort.inSyncWith(profile, config, HOST)
+            .with(POWER_ANTENNA_1, ParamValue.ofByte(99));
+        port.ignoreWriteOf = POWER_ANTENNA_1;
+
+        ReaderOperationException error = assertThrows(ReaderOperationException.class,
+            () -> syncFor(profile).apply(port, config, false));
+        assertTrue(error.getMessage().contains("could not verify managed configuration"), error.getMessage());
+        assertTrue(error.getMessage().contains(POWER_ANTENNA_1), error.getMessage());
     }
 
     private static ReaderConfig mru102Trial() {
